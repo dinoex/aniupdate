@@ -67,6 +67,7 @@
 #define WITH_UDP_PING
 
 #define	MAX_BUF		40000
+#define	MAX_KEY		256
 #define	MIN_DELAY	2
 
 #define	GET_NEXT_DATA(x)	{ argv++; argc--; x = *argv; \
@@ -240,12 +241,15 @@ static int Quiet = NO;
 static int Add_state;
 static int Add_viewed;
 static int Cache_ignore;
-static int Remote_port;
+static int Keep_session;
 static int Local_port;
+static int Remote_port;
 static int Retrys;
 
 static char fbuf[MAX_BUF];
-static char kbuf[MAX_BUF];
+static char kbuf[MAX_KEY];
+static char ksize[MAX_KEY];
+static char khash[MAX_KEY];
 
 static const char C_[] = "";
 
@@ -260,6 +264,7 @@ CONFIG_TYP      Config_box[] = {
 { 0, { &Date_format          }, "Date_format",        "%Y-%m-%d %H:%M:%S" },
 { 1, { &Debug                }, "Debug",              NULL },
 { 0, { &Files_db             }, "Files_db",           "files.db" },
+{ 1, { &Keep_session         }, "Keep_session",       NULL },
 { 1, { &Local_port           }, "Local_port",         "9000" },
 { 0, { &Mylist_db            }, "Mylist_db",          "mylist.db" },
 { 0, { &Password             }, "Password",           NULL },
@@ -388,7 +393,8 @@ out:
 	if (work == NULL)
 		return 4;
 
-	*size = strdup(work + 1);
+	strlcpy(ksize, work + 1, sizeof(ksize));
+	*size = ksize;
 	end = strchr(*size, '|');
 	if (end != NULL)
 		*end = 0;
@@ -398,11 +404,11 @@ out:
 	if (work == NULL)
 		return 5;
 
-	*ed2k = strdup(work + 1);
+	strlcpy(khash, work + 1, sizeof(khash));
+	*ed2k = khash;
 	end = strchr(*ed2k, '|');
 	if (end != NULL)
 		*end = 0;
-
 	string_to_lowercase(*ed2k);
 
 	/* 0436df97e7fe25b620edb25380717479| */
@@ -496,7 +502,7 @@ print_date( const char *prefix, const char *seconds )
 		return;
 
 	now = lsec;
-	strftime(kbuf, MAX_BUF, Date_format, localtime(&now));
+	strftime(kbuf, sizeof(kbuf) - 1, Date_format, localtime(&now));
 	printf("%s%s\n", prefix, kbuf);
 
 }
@@ -1010,7 +1016,7 @@ localdb_delete(const char *name, const char *hash)
 		hash2 = strdup(hash);
 		if (hash2 == NULL)
 			errx(EX_CANTCREAT, "out of mem for database");
-		key.data = strdup(hash);
+		key.data = hash2;
 		key.size = strlen(key.data);
 		rc = db->del(db, &key, 0);
 		if ((rc != 0) && (rc != 1))
@@ -1052,7 +1058,7 @@ localdb_write(const char *name, const char *hash, const char *value)
 		hash2 = strdup(hash);
 		if (hash2 == NULL)
 			errx(EX_CANTCREAT, "out of mem for database");
-		key.data = strdup(hash);
+		key.data = hash2;
 		key.size = strlen(key.data);
 		snprintf(fbuf, MAX_BUF, "%lu|%s", (long)time(NULL), value);
 		data.data = fbuf;
@@ -1074,7 +1080,7 @@ localdb_write_ed2k(const char *name, const char *size, const char *md4, const ch
 {
 	size_t len;
 
-	len = snprintf(kbuf, MAX_BUF - 1, "%s|%s", size, md4);
+	len = snprintf(kbuf, sizeof(kbuf) - 1, "%s|%s", size, md4);
 	localdb_write(name, kbuf, value);
 }
 
@@ -1098,7 +1104,7 @@ localdb_read(const char *name, const char *hash)
 	hash2 = strdup(hash);
 	if (hash2 == NULL)
 		errx(EX_CANTCREAT, "out of mem for database");
-	key.data = strdup(hash);
+	key.data = hash2;
 	key.size = strlen(key.data);
 	data.data = NULL;
 	data.size = 0;
@@ -1392,7 +1398,7 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	if (status[0] != '2')
 		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
 
-	if (status[2] == '1')
+	if ((status[2] != '1') && (status[2] != '0'))
 		warnx("Server returns: %-70.70s", rbuf);
 
 	work = strchr(status, ' ');
@@ -1474,8 +1480,6 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 			Add_source, Add_storage, Add_other, tag) + 1;
 	}
 
-	free(size);
-	free(md4);
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
 	status = rbuf + taglen;
@@ -1523,8 +1527,6 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 
 	len = snprintf(sbuf, MAX_BUF - 1, "MYLIST s=%s&size=%s&ed2k=%s&tag=%s\n",
 		session, size, md4, tag) + 1;
-	free(size);
-	free(md4);
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
 	status = rbuf + taglen;
@@ -1582,8 +1584,6 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 
 	len = snprintf(sbuf, MAX_BUF - 1, "FILE s=%s&size=%s&ed2k=%s&tag=%s\n",
 		session, size, md4, tag) + 1;
-	free(size);
-	free(md4);
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
 	status = rbuf + taglen;
@@ -1879,7 +1879,8 @@ main(int argc, const char *const *argv)
 
 	command_run(argc, argv);
 
-	[anidb_o logout];
+	if ( Keep_session == NO )
+		[anidb_o logout];
 	[network_o close];
 	[network_o free];
 	[config_o free];
