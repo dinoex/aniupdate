@@ -277,6 +277,7 @@ static const char *info_crc[] = {
 typedef struct {
 	unsigned int	crc:2;
 	unsigned int	version:4;
+	unsigned int	censored:2;
 } INFO_STATE_TYP;
 
 typedef union {
@@ -652,6 +653,10 @@ info_show(INFO_TYP *info)
 			break;
 		}
 		printf("version: %d\n", version);
+		if (decoder.value.censored == 1)
+			printf("censored: uncut\n" );
+		if (decoder.value.censored == 2)
+			printf("censored: censored\n" );
 	}
 	if (string_compare(info->f_size,info->f_bytes) != 0)
 		printf("anidb size: %s\n", info->f_bytes);
