@@ -130,7 +130,7 @@ void string_to_lowercase(char *buffer);
 int string_compare(const char *s1, const char *s2);
 int ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k);
 int mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data);
-void print_date( const char *prefix, const char *seconds );
+void print_date(const char *prefix, const char *seconds);
 void mylist_show(MYLIST_TYP *mylist);
 int mylist_edit(MYLIST_TYP *mylist, const char *changes);
 int info_decode(INFO_TYP *info, const char *ed2k_link, const char *data);
@@ -185,6 +185,8 @@ char *localdb_read_ed2k(const char *name, const char *size, const char *md4);
 
 - (network_c *) init;
 
+- (void) save;
+- (void) delay: (unsigned long) seconds;
 - (void) close;
 - (void) open;
 - (void) retry;
@@ -199,14 +201,18 @@ network_c *network_o;
 {
 	const char *tag;
 	char *session;
-	char *status;
-	int taglen;
+	unsigned long auth_delay;
 	char sbuf[MAX_BUF];
 	char rbuf[MAX_BUF];
+	int taglen;
+	int server_status;
 }
 
 - (anidb_c *) init;
+- (int) status;
+- (void) nosession;
 - (void) logout;
+- (void) delay_login;
 - (void) login;
 - (void) alive;
 - (void) ping;
@@ -252,6 +258,8 @@ static char ksize[MAX_KEY];
 static char khash[MAX_KEY];
 
 static const char C_[] = "";
+static const char C_SESSION[] = "session";
+static const char C_NEXT_SEND[] = "next_send";
 
 CONFIG_TYP      Config_box[] = {
 { 0, { &Add_other            }, "Add_other",          C_ },
@@ -489,12 +497,12 @@ mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data)
 }
 
 void
-print_date( const char *prefix, const char *seconds )
+print_date(const char *prefix, const char *seconds)
 {
 	long lsec;
 	time_t now;
 
-	if ( seconds == NULL )
+	if (seconds == NULL)
 		return;
 
 	lsec = atol(seconds);
@@ -674,9 +682,9 @@ info_show(INFO_TYP *info)
 		}
 		printf("version: %d\n", version);
 	}
-	if (string_compare(info->f_size,info->f_bytes) != 0 )
+	if (string_compare(info->f_size,info->f_bytes) != 0)
 		printf("anidb size: %s\n", info->f_bytes);
-	if (string_compare(info->f_md4,info->f_ed2khash) != 0 )
+	if (string_compare(info->f_md4,info->f_ed2khash) != 0)
 		printf("anidb ed2khash: %s\n", info->f_ed2khash);
 	printf("filename: %s\n", info->f_name);
 }
@@ -833,7 +841,7 @@ local_read(const char *name)
 		switch (config[i].typ) {
 		case CT_LOWER_STRING:
 			string_to_lowercase(value);
-		/* FALLTHROUGH */
+			/* FALLTHROUGH */
 		case CT_STRING:
 			*(config[i].u.cvar) =
 				value;
@@ -977,7 +985,6 @@ localdb_cleanup(const char *name, time_t valid_from)
 				/* start over */
 				ret = db->seq(db, &key, &data, R_FIRST);
 				continue;
-
 			}
 			ret = db->seq(db, &key, &data, R_NEXT);
 		}
@@ -1114,7 +1121,7 @@ localdb_read(const char *name, const char *hash)
 		if ((data.data != NULL) && (data.size > 0) && (data.size < sizeof(fbuf))) {
 			strncpy(fbuf, data.data, data.size);
 			fbuf[data.size] = 0;
-			if ( fbuf[data.size - 1] == '\n')
+			if (fbuf[data.size - 1] == '\n')
 				fbuf[data.size - 1] = 0;
 			str = fbuf;
 		} else {
@@ -1151,15 +1158,39 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	return self;
 }
 
+- (void) save
+{
+	time_t now;
+	long delay;
+	char ldata[20];
+
+	now = time(NULL);
+	delay = next_send - now;
+	if (delay > 0) {
+		snprintf(ldata, sizeof(ldata) - 1, "%lu", next_send);
+		localdb_write(Session_db, C_NEXT_SEND, ldata);
+	} else {
+		localdb_delete(Session_db, C_NEXT_SEND);
+	}
+}
+
+- (void) delay: (unsigned long) seconds
+{
+	next_send += seconds;
+	[self save];
+}
+
 - (void) close
 {
 	int rc;
 
-	if ( connected == NO )
+	if (connected == NO)
 		return;
 
 	rc = shutdown(s, SHUT_RDWR);
 	connected = NO;
+
+	[self save];
 }
 
 - (void) open
@@ -1167,6 +1198,9 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	struct hostent *hp;
 	struct in_addr iaddr;
 	struct timeval resp_timeout = { 15, 0 };
+	time_t saved;
+	char *data;
+	char *work;
 	int x = 1;
 	int rc;
 
@@ -1228,6 +1262,16 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 		err(EX_OSERR, "cannot connect");
 
 	connected = YES;
+	next_send = time(NULL);
+	data = localdb_read(Session_db, C_NEXT_SEND);
+	if (data != NULL) {
+		work = strchr(data, '|');
+		if (work != NULL) {
+			saved = atol(++work);
+			if (saved > next_send)
+				next_send = saved;
+		}
+	}
 }
 
 - (void) retry
@@ -1246,7 +1290,7 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	now = time(NULL);
 	delay = next_send - now;
 	if (delay > 0)
-		sleep((unsigned)delay);
+		sleep((unsigned int)delay);
 
 	if (Debug != NO)
 		puts(retry_buf);
@@ -1300,7 +1344,6 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 		warn("recv %ld", llen);
 		retry_count --;
 		[self retry];
-		localdb_delete(Session_db, "session");
 		return [self recv: buf: len];
 #else
 		err(EX_OSERR, "recv %ld", llen);
@@ -1328,9 +1371,31 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 {
 	tag = NULL;
 	session = NULL;
-	status = NULL;
 	taglen = 0;
-        return self;
+	auth_delay = 0;
+	server_status = 0;
+	return self;
+}
+
+- (int) status
+{
+	char *work;
+
+	work = rbuf;
+	if (strncmp(rbuf,tag,(size_t)(taglen -1)) == 0)
+		work += taglen;
+
+	server_status = atoi(work);
+	return server_status;
+}
+
+- (void) nosession
+{
+	if (session == NULL)
+		return;
+
+	localdb_delete(Session_db, C_SESSION);
+	session = NULL;
 }
 
 - (void) logout
@@ -1340,19 +1405,50 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	if (session == NULL)
 		return;
 
-	localdb_delete(Session_db, "session");
 	len = snprintf(sbuf, MAX_BUF - 1, "LOGOUT s=%s&tag=%s\n",
 		session, tag);
-	session = NULL;
+
+	[self nosession];
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
 
-	status = rbuf + taglen;
-	if ((status[0] != '2') && (status[0] != '4')) {
-		/* try to close all sessions */
-		[network_o send: "LOGOUT\n": 0];
-		[network_o recv: rbuf: 0];
+	[self status];
+	if ((server_status == 203) || (server_status == 403))
+		return;
+
+	/* try to close all sessions */
+	[network_o send: "LOGOUT\n": 0];
+	[network_o recv: rbuf: 0];
+}
+
+- (void) delay_login
+{
+	unsigned long add;
+	unsigned long i;
+
+	auth_delay++;
+	if (auth_delay == 1) {
+		[network_o delay: 30];
+		return;
 	}
+	if (auth_delay == 2) {
+		[network_o delay: 2 * 60];
+		return;
+	}
+	if (auth_delay == 3) {
+		[network_o delay: 5 * 60];
+		return;
+	}
+	if (auth_delay == 4) {
+		[network_o delay: 10 * 60];
+		return;
+	}
+		
+	add = 30 * 60;
+	for (i=auth_delay; i > 4; i--) {
+		add <<= 1;
+	}
+	[network_o delay: add];
 }
 
 - (void) login
@@ -1363,10 +1459,13 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	time_t tv;
 	time_t valid_from;
 
+	if (session != NULL)
+		[self nosession];
+
 	tag = User;
 	taglen = strlen(tag) + 1;
 
-	data = localdb_read(Session_db, "session");
+	data = localdb_read(Session_db, C_SESSION);
 	if (data != NULL) {
 		work = strchr(data, '|');
 		if (work != NULL) {
@@ -1385,23 +1484,36 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 		User, Password, tag);
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
-	status = rbuf + taglen;
-	if (status[0] == '6')
-		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
-	if (status[0] == '5') {
-		if ((status[2] == '3') || (status[4] == '1'))
-			errx(EX_SOFTWARE, "Server returns: %-70.70s", rbuf);
+
+	[self status];
+	switch (server_status) {
+	case 200:
+		break;
+	case 201:
+		warnx("Server returns: %-70.70s", rbuf);
+		break;
+	case 500:
+	case 501:
+	case 502:
+	case 506:
+		[self delay_login];
 		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
+		break;
+	case 503:
+	case 504:
+	case 505:
+		[self delay_login];
+		errx(EX_SOFTWARE, "Server returns: %-70.70s", rbuf);
+		break;
+	case 601:
+		[network_o delay: 30 * 60];
+		/* FALLTHROUGH */
+	default:
+		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
+		break;
 	}
 
-	localdb_write(Session_db, "session", session);
-	if (status[0] != '2')
-		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
-
-	if ((status[2] != '1') && (status[2] != '0'))
-		warnx("Server returns: %-70.70s", rbuf);
-
-	work = strchr(status, ' ');
+	work = strchr(rbuf + taglen, ' ');
 	if (work == NULL)
 		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
 
@@ -1410,7 +1522,8 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	if (work != NULL)
 		*work = 0;
 
-	localdb_write(Session_db, "session", session);
+	auth_delay = 0;
+	localdb_write(Session_db, C_SESSION, session);
 }
 
 - (void) alive
@@ -1420,10 +1533,9 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 #ifndef WITH_UDP
 	/* TCP gives a welcome */
 	[network_o recv: rbuf: 0];
-	status = rbuf;
-	if (status[0] != '1') 
+	[self status];
+	if (server_status != 100)
 		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
-
 #endif
 
 #ifdef WITH_UDP
@@ -1442,8 +1554,9 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	len = snprintf(sbuf, MAX_BUF - 1, "PING tag=%s\n", tag) + 1;
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
-	status = rbuf + taglen;
-	if (status[0] != '3')
+	
+	[self status];
+	if (server_status != 300)
 		warnx("Server returns: %-70.70s", rbuf);
 }
 
@@ -1482,17 +1595,25 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
-	status = rbuf + taglen;
-	if (status[0] == '2')
-		return;
-	warnx("Server returns: %-70.70s", rbuf);
-	if ((status[0] == '3') || (status[0] == '4'))
-		return;
-	if (status[0] != '5')
-		return;
-	if ((status[2] == '0') || (status[2] == '1')) {
-		[self logout];
+
+	[self status];
+	switch (server_status) {
+	case 501:
+	case 506:
 		[self login];
+		[self add: ed2k_link: edit];
+		return;
+	case 310:
+	case 311:
+		warnx("Server returns: %-70.70s", rbuf);
+		return;
+	case 210:
+		return;
+	case 500:
+	case 502:
+		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
+	default:
+		warnx("Server returns: %-70.70s", rbuf);
 	}
 }
 
@@ -1500,6 +1621,7 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 {
 	char *size = NULL;
 	char *md4 = NULL;
+	char *work;
 	char *data;
 	char *end;
 	size_t len;
@@ -1529,34 +1651,43 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 		session, size, md4, tag) + 1;
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
-	status = rbuf + taglen;
-	if ((status[0] == '2') && (status[1] == '2') && (status[2] == '1')) {
-		/* we have data */
-		data = strchr(status, '\n');
-		if (data == NULL)
-			data = status + 3;
-		end = strchr(++data, '\n');
-		if (end != NULL)
-			*end = 0;
-		localdb_write_ed2k(Mylist_db, size, md4, data);
-		return fbuf;
-	}
-	warnx("Server returns: %-70.70s", rbuf);
-	if ((status[0] == '3') || (status[0] == '4'))
-		return NULL;
-	if (status[0] != '5')
-		return NULL;
-	if ((status[2] == '0') || (status[2] == '1')) {
-		[self logout];
+
+	[self status];
+	switch (server_status) {
+	case 501:
+	case 506:
 		[self login];
+		return [self mylist: ed2k_link: force];
+	case 321:
+		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
+	case 221:
+		break;
+	case 500:
+	case 502:
+		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
+	default:
+		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
 	}
-	return NULL;
+
+	/* we have data */
+	work = rbuf + taglen;
+	data = strchr(work, '\n');
+	if (data == NULL)
+		data = work + 3;
+	end = strchr(++data, '\n');
+	if (end != NULL)
+		*end = 0;
+	localdb_write_ed2k(Mylist_db, size, md4, data);
+	return fbuf;
 }
 
 - (char *) files: (const char *) ed2k_link: (int) force
 {
 	char *size = NULL;
 	char *md4 = NULL;
+	char *work;
 	char *data;
 	char *end;
 	size_t len;
@@ -1586,28 +1717,36 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 		session, size, md4, tag) + 1;
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
-	status = rbuf + taglen;
-	if ((status[0] == '2') && (status[1] == '2') && (status[2] == '0')) {
-		/* we have data */
-		data = strchr(status, '\n');
-		if (data == NULL)
-			data = status + 3;
-		end = strchr(++data, '\n');
-		if (end != NULL)
-			*end = 0;
-		localdb_write_ed2k(Files_db, size, md4, data);
-		return fbuf;
-	}
-	warnx("Server returns: %-70.70s", rbuf);
-	if ((status[0] == '3') || (status[0] == '4'))
-		return NULL;
-	if (status[0] != '5')
-		return NULL;
-	if ((status[2] == '0') || (status[2] == '1')) {
-		[self logout];
+
+	[self status];
+	switch (server_status) {
+	case 501:
+	case 506:
 		[self login];
+		return [self files: ed2k_link: force];
+	case 320:
+		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
+	case 220:
+		break;
+	case 500:
+	case 502:
+		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
+	default:
+		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
 	}
-	return NULL;
+
+	/* we have data */
+	work = rbuf + taglen;
+	data = strchr(work, '\n');
+	if (data == NULL)
+		data = work + 3;
+	end = strchr(++data, '\n');
+	if (end != NULL)
+		*end = 0;
+	localdb_write_ed2k(Files_db, size, md4, data);
+	return fbuf;
 }
 
 @end
@@ -1809,7 +1948,7 @@ command_run(int argc, const char *const *argv)
 			if (data == NULL)
 				break;
 			mylist_decode(&mylist_entry, cptr, data);
-			if ( mylist_edit(&mylist_entry,field) != 0 )
+			if (mylist_edit(&mylist_entry,field) != 0)
 				 usage();
 			[anidb_o add: cptr: &mylist_entry];
 			[anidb_o mylist: cptr: YES];
@@ -1879,7 +2018,7 @@ main(int argc, const char *const *argv)
 
 	command_run(argc, argv);
 
-	if ( Keep_session == NO )
+	if (Keep_session == NO)
 		[anidb_o logout];
 	[network_o close];
 	[network_o free];

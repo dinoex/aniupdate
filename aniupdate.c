@@ -130,7 +130,7 @@ void string_to_lowercase(char *buffer);
 int string_compare(const char *s1, const char *s2);
 int ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k);
 int mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data);
-void print_date( const char *prefix, const char *seconds );
+void print_date(const char *prefix, const char *seconds);
 void mylist_show(MYLIST_TYP *mylist);
 int mylist_edit(MYLIST_TYP *mylist, const char *changes);
 int info_decode(INFO_TYP *info, const char *ed2k_link, const char *data);
@@ -148,7 +148,7 @@ void config_default(CONFIG_TYP *config);
 long config_find(CONFIG_TYP *config, const char *key);
 int config_set_var(CONFIG_TYP *config, const char *key, char *value);
 void config_parse_line(CONFIG_TYP *config, const char *parameter);
-void config_read(void);
+void config_read(const char *filename);
 void config_check(void);
 
 void localdb_cleanup(const char *name, time_t valid_from);
@@ -158,14 +158,18 @@ void localdb_write_ed2k(const char *name, const char *size, const char *md4, con
 char *localdb_read(const char *name, const char *hash);
 char *localdb_read_ed2k(const char *name, const char *size, const char *md4);
 
+void network_save(void);
 void network_close(void);
 void network_open(void);
 void network_retry(void);
 void network_send(const char *buf, size_t len);
 int network_recv(size_t len);
 
+int anidb_status(void);
+void anidb_nosession(void);
 void anidb_logout(void);
 void anidb_alive(void);
+void anidb_delay_login(void);
 void anidb_login(void);
 void anidb_ping(void);
 void anidb_add(const char *ed2k_link, MYLIST_TYP *edit);
@@ -208,6 +212,8 @@ static time_t next_send = 0;
 static size_t retry_count = 0;
 static size_t retry_len = 0;
 static const char *retry_buf = NULL;
+static unsigned long auth_delay = 0;
+static int server_status = 0;
 
 static char rbuf[MAX_BUF];
 static char sbuf[MAX_BUF];
@@ -216,12 +222,13 @@ static char kbuf[MAX_KEY];
 static char ksize[MAX_KEY];
 static char khash[MAX_KEY];
 
-static const char *Tag = NULL;
+static const char *tag = NULL;
 static char *session = NULL;
-static char *status = NULL;
-int Taglen = 0;
+int taglen = 0;
 
 static const char C_[] = "";
+static const char C_SESSION[] = "session";
+static const char C_NEXT_SEND[] = "next_send";
 
 static long Config_box_anzahl;
 CONFIG_TYP      Config_box[] = {
@@ -461,12 +468,12 @@ mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data)
 }
 
 void
-print_date( const char *prefix, const char *seconds )
+print_date(const char *prefix, const char *seconds)
 {
 	long lsec;
 	time_t now;
 
-	if ( seconds == NULL )
+	if (seconds == NULL)
 		return;
 
 	lsec = atol(seconds);
@@ -646,9 +653,9 @@ info_show(INFO_TYP *info)
 		}
 		printf("version: %d\n", version);
 	}
-	if (string_compare(info->f_size,info->f_bytes) != 0 )
+	if (string_compare(info->f_size,info->f_bytes) != 0)
 		printf("anidb size: %s\n", info->f_bytes);
-	if (string_compare(info->f_md4,info->f_ed2khash) != 0 )
+	if (string_compare(info->f_md4,info->f_ed2khash) != 0)
 		printf("anidb ed2khash: %s\n", info->f_ed2khash);
 	printf("filename: %s\n", info->f_name);
 }
@@ -803,34 +810,27 @@ config_set_var(CONFIG_TYP *config, const char *key, char *value)
 {
 	long i;
 
-#ifdef ENABLE_SEQUENCE_SEARCH
-	for (i = 1L; config[i].typ != -1; i ++) {
-		if (string_compare(config[i].name, key) == 0) {
-#else
-	{
-		i = config_find(config, key);
-		if (i > 0L) {
-#endif
-			switch (config[i].typ) {
-			case CT_LOWER_STRING:
-				string_to_lowercase(value);
-				/* FALLTHROUGH */
-			case CT_STRING:
-				*(config[i].u.cvar) =
-					value;
-				break;
-			case CT_INT:
-				*(config[i].u.ivar) =
-					atoi(value);
-				break;
-			case CT_LONG:
-			case CT_SIZE:
-				*(config[i].u.lvar) =
-					atol(value);
-				break;
-			};
-			return YES;
-		}
+	i = config_find(config, key);
+	if (i > 0L) {
+		switch (config[i].typ) {
+		case CT_LOWER_STRING:
+			string_to_lowercase(value);
+			/* FALLTHROUGH */
+		case CT_STRING:
+			*(config[i].u.cvar) =
+				value;
+			break;
+		case CT_INT:
+			*(config[i].u.ivar) =
+				atoi(value);
+			break;
+		case CT_LONG:
+		case CT_SIZE:
+			*(config[i].u.lvar) =
+				atol(value);
+			break;
+		};
+		return YES;
 	};
 	return NO;
 }
@@ -888,13 +888,13 @@ config_parse_line(CONFIG_TYP *config, const char *parameter)
 }
 
 void
-config_read(void)
+config_read(const char *filename)
 {
 	const char *delimiter = "\r\n";
 	char *buffer;
 	char *line;
 
-	buffer = local_read(Config_file);
+	buffer = local_read(filename);
 	if (buffer == NULL)
                 return;
 
@@ -1095,7 +1095,7 @@ localdb_read(const char *name, const char *hash)
 		if ((data.data != NULL) && (data.size > 0) && (data.size < sizeof(fbuf))) {
 			strncpy(fbuf, data.data, data.size);
 			fbuf[data.size] = 0;
-			if ( fbuf[data.size - 1] == '\n')
+			if (fbuf[data.size - 1] == '\n')
 				fbuf[data.size - 1] = 0;
 			str = fbuf;
 		} else {
@@ -1119,6 +1119,36 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	return localdb_read(name, kbuf);
 }
 
+void
+network_save(void)
+{
+	time_t now;
+	long delay;
+	char ldata[20];
+
+	now = time(NULL);
+	delay = next_send - now;
+	if (delay > 0) {
+		snprintf(ldata, sizeof(ldata) - 1, "%lu", next_send);
+		localdb_write(Session_db, C_NEXT_SEND, ldata);
+	} else {
+		localdb_delete(Session_db, C_NEXT_SEND);
+	}
+}
+
+void
+network_close(void)
+{
+	int rc;
+
+	if (connected == NO)
+		return;
+
+	rc = shutdown(s, SHUT_RDWR);
+	connected = NO;
+
+	network_save();
+}
 
 void
 network_open(void)
@@ -1126,6 +1156,9 @@ network_open(void)
 	struct hostent *hp;
 	struct in_addr iaddr;
 	struct timeval resp_timeout = { 15, 0 };
+	time_t saved;
+	char *data;
+	char *work;
 	int x = 1;
 	int rc;
 
@@ -1187,14 +1220,17 @@ network_open(void)
 		err(EX_OSERR, "cannot connect");
 
 	connected = YES;
-}
 
-void
-network_close(void)
-{
-	int rc;
-	rc = shutdown(s, SHUT_RDWR);
-	connected = NO;
+	next_send = time(NULL);
+	data = localdb_read(Session_db, C_NEXT_SEND);
+	if (data != NULL) {
+		work = strchr(data, '|');
+		if (work != NULL) {
+			saved = atol(++work);
+			if (saved > next_send)
+				next_send = saved;
+		}
+	}
 }
 
 void
@@ -1214,7 +1250,7 @@ network_retry(void)
 	now = time(NULL);
 	delay = next_send - now;
 	if (delay > 0)
-		sleep((unsigned)delay);
+		sleep((unsigned int)delay);
 
 	if (Debug != NO)
 		puts(retry_buf);
@@ -1289,26 +1325,51 @@ network_recv(size_t len)
 }
 
 
+int
+anidb_status(void)
+{
+	char *work;
+
+	work = rbuf;
+	if (strncmp(rbuf,tag,(size_t)(taglen -1)) == 0)
+		work += taglen;
+
+	server_status = atoi(work);
+	return server_status;
+}
+
+void
+anidb_nosession(void)
+{
+	if (session == NULL)
+		return;
+
+	localdb_delete(Session_db, C_SESSION);
+	session = NULL;
+}
+
 void
 anidb_logout(void)
 {
 	size_t len;
 
-	if (session != NULL) {
-		localdb_delete(Session_db, "session");
-		len = snprintf(sbuf, MAX_BUF - 1, "LOGOUT s=%s&tag=%s\n",
-			session, Tag);
-		session = NULL;
-		network_send(sbuf, len);
-		network_recv(0);
+	if (session == NULL)
+		return;
 
-		status = rbuf + Taglen;
-		if ((status[0] != '2') && (status[0] != '4')) {
-			/* try to close all sessions */
-			network_send("LOGOUT\n", 0);
-			network_recv(0);
-		}
-	}
+	len = snprintf(sbuf, MAX_BUF - 1, "LOGOUT s=%s&tag=%s\n",
+		session, tag);
+
+	anidb_nosession();
+	network_send(sbuf, len);
+	network_recv(0);
+
+	anidb_status();
+	if ((server_status == 203) || (server_status == 403))
+		return;
+
+	/* try to close all sessions */
+	network_send("LOGOUT\n", 0);
+	network_recv(0);
 }
 
 void
@@ -1319,8 +1380,8 @@ anidb_alive(void)
 #ifndef WITH_UDP
 	/* TCP gives a welcome */
 	network_recv(0);
-	status = rbuf;
-	if (status[0] != '1') 
+	anidb_status();
+	if (server_status != 100)
 		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
 
 #endif
@@ -1335,6 +1396,38 @@ anidb_alive(void)
 }
 
 void
+anidb_delay_login(void)
+{
+	unsigned long add;
+	unsigned long i;
+
+	auth_delay++;
+	if (auth_delay == 1) {
+		next_send += 30;
+		return;
+	}
+	if (auth_delay == 2) {
+		next_send += 2 * 60;
+		return;
+	}
+	if (auth_delay == 3) {
+		next_send += 5 * 60;
+		return;
+	}
+	if (auth_delay == 4) {
+		next_send += 10 * 60;
+		return;
+	}
+		
+	add = 30 * 60;
+	for (i=auth_delay; i > 4; i--) {
+		add <<= 1;
+	}
+	next_send += add;
+	network_save();
+}
+
+void
 anidb_login(void)
 {
 	size_t len;
@@ -1343,9 +1436,12 @@ anidb_login(void)
 	time_t tv;
 	time_t valid_from;
 
-	Tag = User;
-	Taglen = strlen(Tag) + 1;
-	data = localdb_read(Session_db, "session");
+	if (session != NULL)
+		anidb_nosession();
+
+	tag = User;
+	taglen = strlen(tag) + 1;
+	data = localdb_read(Session_db, C_SESSION);
 	if (data != NULL) {
 		work = strchr(data, '|');
 		if (work != NULL) {
@@ -1361,24 +1457,40 @@ anidb_login(void)
 
 	len = snprintf(sbuf, MAX_BUF - 1,
 		"AUTH user=%s&pass=%s&protover=2&client=aniupdate&clientver=1&tag=%s\n",
-		User, Password, Tag);
+		User, Password, tag);
 	network_send(sbuf, len);
 	network_recv(0);
-	status = rbuf + Taglen;
-	if (status[0] == '6')
-		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
-	if (status[0] == '5') {
-		if ((status[2] == '3') || (status[4] == '1'))
-			errx(EX_SOFTWARE, "Server returns: %-70.70s", rbuf);
-		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
-	}
-	if (status[0] != '2')
-		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
 
-	if ((status[2] != '1') && (status[2] != '0'))
+	anidb_status();
+	switch (server_status) {
+	case 200:
+		break;
+	case 201:
 		warnx("Server returns: %-70.70s", rbuf);
+		break;
+	case 500:
+	case 501:
+	case 502:
+	case 506:
+		anidb_delay_login();
+		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
+		break;
+	case 503:
+	case 504:
+	case 505:
+		anidb_delay_login();
+		errx(EX_SOFTWARE, "Server returns: %-70.70s", rbuf);
+		break;
+	case 601:
+		next_send += 30 * 60;
+		network_save();
+		/* FALLTHROUGH */
+	default:
+		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
+		break;
+	}
 
-	work = strchr(status, ' ');
+	work = strchr(rbuf + taglen, ' ');
 	if (work == NULL)
 		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
 
@@ -1387,7 +1499,8 @@ anidb_login(void)
 	if (work != NULL)
 		*work = 0;
 
-	localdb_write(Session_db, "session", session);
+	auth_delay = 0;
+	localdb_write(Session_db, C_SESSION, session);
 }
 
 void
@@ -1395,11 +1508,12 @@ anidb_ping(void)
 {
 	size_t len;
 
-	len = snprintf(sbuf, MAX_BUF - 1, "PING tag=%s\n", Tag) + 1;
+	len = snprintf(sbuf, MAX_BUF - 1, "PING tag=%s\n", tag) + 1;
 	network_send(sbuf, len);
 	network_recv(0);
-	status = rbuf + Taglen;
-	if (status[0] != '3')
+
+	anidb_status();
+	if (server_status != 300)
 		warnx("Server returns: %-70.70s", rbuf);
 }
 
@@ -1429,27 +1543,35 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 		len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%s&viewed=%s"
 			"&source=%s&storage=%s&other=%s&edit=1&tag=%s\n",
 			session, size, md4, edit->ml_state, edit->ml_viewdate,
-			edit->ml_source, edit->ml_storage, edit->ml_other, Tag) + 1;
+			edit->ml_source, edit->ml_storage, edit->ml_other, tag) + 1;
 	} else {
 		len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%d&viewed=%d"
 			"&source=%s&storage=%s&other=%s&tag=%s\n",
 			session, size, md4, Add_state, Add_viewed,
-			Add_source, Add_storage, Add_other, Tag) + 1;
+			Add_source, Add_storage, Add_other, tag) + 1;
 	}
 
 	network_send(sbuf, len);
 	network_recv(0);
-	status = rbuf + Taglen;
-	if (status[0] == '2')
-		return;
-	warnx("Server returns: %-70.70s", rbuf);
-	if ((status[0] == '3') || (status[0] == '4'))
-		return;
-	if (status[0] != '5')
-		return;
-	if ((status[2] == '0') || (status[2] == '1')) {
-		anidb_logout();
+
+	anidb_status();
+	switch (server_status) {
+	case 501:
+	case 506:
 		anidb_login();
+		anidb_add(ed2k_link,edit);
+		return;
+	case 310:
+	case 311:
+		warnx("Server returns: %-70.70s", rbuf);
+		return;
+	case 210:
+		return;
+	case 500:
+	case 502:
+		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
+	default:
+		warnx("Server returns: %-70.70s", rbuf);
 	}
 }
 
@@ -1458,6 +1580,7 @@ anidb_mylist(const char *ed2k_link, int force)
 {
 	char *size = NULL;
 	char *md4 = NULL;
+	char *work;
 	char *data;
 	char *end;
 	size_t len;
@@ -1484,31 +1607,39 @@ anidb_mylist(const char *ed2k_link, int force)
 		anidb_login();
 
 	len = snprintf(sbuf, MAX_BUF - 1, "MYLIST s=%s&size=%s&ed2k=%s&tag=%s\n",
-		session, size, md4, Tag) + 1;
+		session, size, md4, tag) + 1;
 	network_send(sbuf, len);
 	network_recv(0);
-	status = rbuf + Taglen;
-	if ((status[0] == '2') && (status[1] == '2') && (status[2] == '1')) {
-		/* we have data */
-		data = strchr(status, '\n');
-		if (data == NULL)
-			data = status + 3;
-		end = strchr(++data, '\n');
-		if (end != NULL)
-			*end = 0;
-		localdb_write_ed2k(Mylist_db, size, md4, data);
-		return fbuf;
-	}
-	warnx("Server returns: %-70.70s", rbuf);
-	if ((status[0] == '3') || (status[0] == '4'))
-		return NULL;
-	if (status[0] != '5')
-		return NULL;
-	if ((status[2] == '0') || (status[2] == '1')) {
-		anidb_logout();
+
+	anidb_status();
+	switch (server_status) {
+	case 501:
+	case 506:
 		anidb_login();
+		return anidb_mylist(ed2k_link,force);
+	case 321:
+		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
+	case 221:
+		break;
+	case 500:
+	case 502:
+		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
+	default:
+		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
 	}
-	return NULL;
+
+	/* we have data */
+	work = rbuf + taglen;
+	data = strchr(work, '\n');
+	if (data == NULL)
+		data = work + 3;
+	end = strchr(++data, '\n');
+	if (end != NULL)
+		*end = 0;
+	localdb_write_ed2k(Mylist_db, size, md4, data);
+	return fbuf;
 }
 
 char *
@@ -1516,6 +1647,7 @@ anidb_files(const char *ed2k_link, int force)
 {
 	char *size = NULL;
 	char *md4 = NULL;
+	char *work;
 	char *data;
 	char *end;
 	size_t len;
@@ -1542,31 +1674,39 @@ anidb_files(const char *ed2k_link, int force)
 		anidb_login();
 
 	len = snprintf(sbuf, MAX_BUF - 1, "FILE s=%s&size=%s&ed2k=%s&tag=%s\n",
-		session, size, md4, Tag) + 1;
+		session, size, md4, tag) + 1;
 	network_send(sbuf, len);
 	network_recv(0);
-	status = rbuf + Taglen;
-	if ((status[0] == '2') && (status[1] == '2') && (status[2] == '0')) {
-		/* we have data */
-		data = strchr(status, '\n');
-		if (data == NULL)
-			data = status + 3;
-		end = strchr(++data, '\n');
-		if (end != NULL)
-			*end = 0;
-		localdb_write_ed2k(Files_db, size, md4, data);
-		return fbuf;
-	}
-	warnx("Server returns: %-70.70s", rbuf);
-	if ((status[0] == '3') || (status[0] == '4'))
-		return NULL;
-	if (status[0] != '5')
-		return NULL;
-	if ((status[2] == '0') || (status[2] == '1')) {
-		anidb_logout();
+
+	anidb_status();
+	switch (server_status) {
+	case 501:
+	case 506:
 		anidb_login();
+		return anidb_files(ed2k_link, force);
+	case 320:
+		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
+	case 220:
+		break;
+	case 500:
+	case 502:
+		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
+	default:
+		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
 	}
-	return NULL;
+
+	/* we have data */
+	work = rbuf + taglen;
+	data = strchr(work, '\n');
+	if (data == NULL)
+		data = work + 3;
+	end = strchr(++data, '\n');
+	if (end != NULL)
+		*end = 0;
+	localdb_write_ed2k(Files_db, size, md4, data);
+	return fbuf;
 }
 
 
@@ -1766,7 +1906,7 @@ command_run(int argc, const char *const *argv)
 			if (data == NULL)
 				break;
 			mylist_decode(&mylist_entry, cptr, data);
-			if ( mylist_edit(&mylist_entry,field) != 0 )
+			if (mylist_edit(&mylist_entry,field) != 0)
 				 usage();
 			anidb_add(cptr, &mylist_entry);
 			anidb_mylist(cptr, YES);
@@ -1819,7 +1959,7 @@ main(int argc, const char *const *argv)
 {
 	config_default(Config_box);
 	command_config(argc, argv);
-	config_read();
+	config_read(Config_file);
 
 	command_options(argc, argv);
 	config_check();
@@ -1828,12 +1968,9 @@ main(int argc, const char *const *argv)
 
 	command_run(argc, argv);
 
-	if ( Keep_session == NO )
+	if (Keep_session == NO)
 		anidb_logout();
-
-	if (connected != NO)
-		network_close();
-
+	network_close();
 	return 0;
 }
 
