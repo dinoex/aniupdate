@@ -1018,6 +1018,12 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 #endif
 	if (llen < 0) {
 #ifdef WITH_UDP
+		if (errno == ECONNREFUSED) {
+			next_send = time(NULL);
+			next_send += 30 * 60;
+			network_save();
+			err(EX_TEMPFAIL, "recv %ld", llen);
+		}
 		if ((errno != EAGAIN) || (retry_count == 0) || (retry_len == 0))
 			err(EX_OSERR, "recv %ld", llen);
 		warn("recv %ld", llen);
