@@ -1270,8 +1270,11 @@ network_recv(size_t len)
 #endif
 	}
 
-	if (llen == 0)
-		network_recv(len);
+	if (llen == 0) {
+		retry_count --;
+		network_retry();
+		return network_recv(len);
+	}
 
 	if (Debug != NO)
 		puts(rbuf);
