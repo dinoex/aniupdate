@@ -59,6 +59,8 @@
 #include <fcntl.h>
 #include <db.h>
 
+#include <objc/Object.h>
+
 #undef WITH_UDP
 #define WITH_UDP
 #undef WITH_UDP_PING
@@ -67,8 +69,6 @@
 #define	MAX_BUF		40000
 #define	MIN_DELAY	2
 
-#define	NO		0
-#define	YES		1
 #define	GET_NEXT_DATA(x)	{ argv++; argc--; x = *argv; \
 				if (x == NULL) usage(); }
 
@@ -142,12 +142,23 @@ void file_read(void *buffer, size_t bytes, size_t count, FILE *handle);
 
 char *local_read(const char *name);
 
-void config_sorted(CONFIG_TYP *config);
-void config_default(CONFIG_TYP *config);
-long config_find(CONFIG_TYP *config, const char *key);
-int config_set_var(CONFIG_TYP *config, const char *key, char *value);
-void config_parse_line(CONFIG_TYP *config, const char *parameter);
-void config_read(void);
+@interface config_c : Object
+{
+	CONFIG_TYP	*config;
+	long		anzahl;
+}
+
+- (config_c *) init: (CONFIG_TYP *) box;
+
+- (long) find: (const char *) key;
+- (int) set_var: (const char *) key: (char *) value;
+- (void) parse_line: (const char *) parameter;
+- (void) read: (const char *) filename;
+
+@end
+
+config_c *config_o;
+
 void config_check(void);
 
 void localdb_cleanup(const char *name, time_t valid_from);
@@ -157,19 +168,54 @@ void localdb_write_ed2k(const char *name, const char *size, const char *md4, con
 char *localdb_read(const char *name, const char *hash);
 char *localdb_read_ed2k(const char *name, const char *size, const char *md4);
 
-void network_close(void);
-void network_open(void);
-void network_retry(void);
-void network_send(const char *buf, size_t len);
-int network_recv(size_t len);
+@interface network_c : Object
+{
+	int connected;
+	int s;
 
-void anidb_logout(void);
-void anidb_alive(void);
-void anidb_login(void);
-void anidb_ping(void);
-void anidb_add(const char *ed2k_link, MYLIST_TYP *edit);
-char *anidb_mylist(const char *ed2k_link, int force);
-char *anidb_files(const char *ed2k_link, int force);
+	struct sockaddr_in sock_in;
+	struct sockaddr_in local_in;
+
+	time_t next_send;
+	size_t retry_count;
+	size_t retry_len;
+	const char *retry_buf;
+}
+
+- (network_c *) init;
+
+- (void) close;
+- (void) open;
+- (void) retry;
+- (void) send: (const char *) buf: (size_t) len;
+- (int) recv: (char *) buf: (size_t) len;
+
+@end
+
+network_c *network_o;
+
+@interface anidb_c : Object
+{
+	const char *tag;
+	char *session;
+	char *status;
+	int taglen;
+	char sbuf[MAX_BUF];
+	char rbuf[MAX_BUF];
+}
+
+- (anidb_c *) init;
+- (void) logout;
+- (void) login;
+- (void) alive;
+- (void) ping;
+- (void) add: (const char *) ed2k_link: (MYLIST_TYP *) edit;
+- (char *) mylist: (const char *) ed2k_link: (int) force;
+- (char *) files: (const char *) ed2k_link: (int) force;
+
+@end
+
+anidb_c *anidb_o;
 
 void usage(void);
 void command_config(int argc, const char *const *argv);
@@ -198,30 +244,12 @@ static int Remote_port;
 static int Local_port;
 static int Retrys;
 
-static int connected = NO;
-static int s = -1;
-static struct sockaddr_in sock_in;
-static struct sockaddr_in local_in;
-static time_t next_send = 0;
-static size_t retry_count = 0;
-static size_t retry_len = 0;
-static const char *retry_buf = NULL;
-
-static char rbuf[MAX_BUF];
-static char sbuf[MAX_BUF];
 static char fbuf[MAX_BUF];
 static char kbuf[MAX_BUF];
 
-static const char *Tag = NULL;
-static char *session = NULL;
-static char *status = NULL;
-int Taglen = 0;
-
 static const char C_[] = "";
 
-static long Config_box_anzahl;
 CONFIG_TYP      Config_box[] = {
-{ -1, { &Config_box_anzahl   }, "_Config_box_anzahl", NULL },
 { 0, { &Add_other            }, "Add_other",          C_ },
 { 0, { &Add_source           }, "Add_source",         C_ },
 { 1, { &Add_state            }, "Add_state",          "1" },
@@ -719,12 +747,17 @@ local_read(const char *name)
 }
 
 
-void
-config_sorted(CONFIG_TYP *config)
+@implementation config_c
+
+- (config_c *) init: (CONFIG_TYP *) box
 {
 	long i;
 	int flag;
 
+	[super init];
+
+	/* names must be sorrtet */
+	config = box;
 	for (i = 1L; config[i].typ != -1; i ++) {
 		if (config[i + 1].typ == -1)
 			break;
@@ -735,14 +768,9 @@ config_sorted(CONFIG_TYP *config)
 		errx(EX_CONFIG, "config structure defunct, <%s> >= <%s>",
 			config[i].name, config[i + 1].name);
 	};
-	*(config[0].u.lvar) = i + 1;
-}
+	anzahl = i + 1;
 
-void config_default(CONFIG_TYP *config)
-{
-	long i;
-
-	config_sorted(config);
+	/* set defaults */
 	for (i = 1L; config[i].typ != -1; i ++) {
 		switch (config[i].typ) {
 		case CT_STRING:
@@ -763,18 +791,16 @@ void config_default(CONFIG_TYP *config)
 			break;
 		}
 	}
+        return self;
 }
 
-long
-config_find(CONFIG_TYP *config, const char *key)
+- (long) find: (const char *) key
 {
 	int how_far;
 	long bin_mid;
 	long bin_low;
 	long bin_high;
-	long anzahl;
 
-	anzahl = *(config[0].u.lvar);
 	if (anzahl > 0L) {
 		bin_low = 0;
 		bin_high = anzahl - 1;
@@ -792,45 +818,36 @@ config_find(CONFIG_TYP *config, const char *key)
 	return CT_NO_DATA;
 }
 
-int
-config_set_var(CONFIG_TYP *config, const char *key, char *value)
+- (int) set_var: (const char *) key: (char *) value
 {
 	long i;
 
-#ifdef ENABLE_SEQUENCE_SEARCH
-	for (i = 1L; config[i].typ != -1; i ++) {
-		if (string_compare(config[i].name, key) == 0) {
-#else
-	{
-		i = config_find(config, key);
-		if (i > 0L) {
-#endif
-			switch (config[i].typ) {
-			case CT_LOWER_STRING:
-				string_to_lowercase(value);
-				/* FALLTHROUGH */
-			case CT_STRING:
-				*(config[i].u.cvar) =
-					value;
-				break;
-			case CT_INT:
-				*(config[i].u.ivar) =
-					atoi(value);
-				break;
-			case CT_LONG:
-			case CT_SIZE:
-				*(config[i].u.lvar) =
-					atol(value);
-				break;
-			};
-			return YES;
-		}
+	i = [self find: key];
+	if (i > 0L) {
+		switch (config[i].typ) {
+		case CT_LOWER_STRING:
+			string_to_lowercase(value);
+		/* FALLTHROUGH */
+		case CT_STRING:
+			*(config[i].u.cvar) =
+				value;
+			break;
+		case CT_INT:
+			*(config[i].u.ivar) =
+				atoi(value);
+			break;
+		case CT_LONG:
+		case CT_SIZE:
+			*(config[i].u.lvar) =
+				atol(value);
+			break;
+		};
+		return YES;
 	};
 	return NO;
 }
 
-void
-config_parse_line(CONFIG_TYP *config, const char *parameter)
+- (void) parse_line: (const char *) parameter
 {
 	int found;
 	char *buffer;
@@ -872,7 +889,7 @@ config_parse_line(CONFIG_TYP *config, const char *parameter)
 			*work = 0;
 	}
 		
-	found = config_set_var(config, buffer, value);
+	found = [self set_var: buffer: value];
 	if (found != NO)
 		return;
 
@@ -881,23 +898,24 @@ config_parse_line(CONFIG_TYP *config, const char *parameter)
 #endif
 }
 
-void
-config_read(void)
+- (void) read: (const char *) filename
 {
 	const char *delimiter = "\r\n";
 	char *buffer;
 	char *line;
 
-	buffer = local_read(Config_file);
+	buffer = local_read(filename);
 	if (buffer == NULL)
                 return;
 
 	line = strtok(buffer, delimiter);
 	while (line != NULL) {
-		config_parse_line(Config_box, line);
+		[config_o parse_line: line];
 		line = strtok(NULL, delimiter);
 	}
 }
+
+@end
 
 void
 config_check(void)
@@ -953,6 +971,7 @@ localdb_cleanup(const char *name, time_t valid_from)
 				/* start over */
 				ret = db->seq(db, &key, &data, R_FIRST);
 				continue;
+
 			}
 			ret = db->seq(db, &key, &data, R_NEXT);
 		}
@@ -1113,9 +1132,31 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	return localdb_read(name, kbuf);
 }
 
+@implementation network_c : Object
 
-void
-network_open(void)
+- (network_c *) init
+{
+	connected = NO;
+	s = -1;
+	next_send = 0;
+	retry_count = 0;
+	retry_len = 0;
+	retry_buf = NULL;
+	return self;
+}
+
+- (void) close
+{
+	int rc;
+
+	if ( connected == NO )
+		return;
+
+	rc = shutdown(s, SHUT_RDWR);
+	connected = NO;
+}
+
+- (void) open
 {
 	struct hostent *hp;
 	struct in_addr iaddr;
@@ -1183,16 +1224,7 @@ network_open(void)
 	connected = YES;
 }
 
-void
-network_close(void)
-{
-	int rc;
-	rc = shutdown(s, SHUT_RDWR);
-	connected = NO;
-}
-
-void
-network_retry(void)
+- (void) retry
 {
 #ifdef USE_WRITE
 	struct iovec iov[2];
@@ -1226,36 +1258,34 @@ network_retry(void)
 	next_send = time(NULL) + MIN_DELAY;
 }
 
-void
-network_send(const char *buf, size_t len)
+- (void) send: (const char *) buf: (size_t) len
 {
 	if (connected == NO)
-		network_open();
+		[self open];
 
 	if (len == 0)
 		len = strlen(buf) + 1;
 	retry_len = len;
 	retry_count = Retrys;
 	retry_buf = buf;
-	network_retry();
+	[self retry];
 }
 
-int
-network_recv(size_t len)
+- (int) recv: (char *) buf: (size_t) len
 {
 	long llen;
 
 	if (connected == NO)
-		network_open();
+		[self open];
 
 	if (len == 0)
 		len = MAX_BUF - 1;
 
-	bzero(rbuf, sizeof(rbuf));
+	bzero(buf, len);
 #ifdef USE_READ
-	llen = read(s, rbuf, len);
+	llen = read(s, buf, len);
 #else
-	llen = recv(s, rbuf, len, 0);
+	llen = recv(s, buf, len, 0);
 #endif
 	if (llen < 0) {
 #ifdef WITH_UDP
@@ -1263,70 +1293,63 @@ network_recv(size_t len)
 			err(EX_OSERR, "recv %ld", llen);
 		warn("recv %ld", llen);
 		retry_count --;
-		network_retry();
-		return network_recv(len);
+		[self retry];
+		localdb_delete(Session_db, "session");
+		return [self recv: buf: len];
 #else
 		err(EX_OSERR, "recv %ld", llen);
 #endif
 	}
 
-	if (llen == 0)
-		network_recv(len);
+	if (llen == 0) {
+		retry_count --;
+		[self retry];
+		return [self recv: buf: len];
+	}
 
 	if (Debug != NO)
-		puts(rbuf);
+		puts(buf);
 
 	return 0;
 }
 
+@end
 
-void
-anidb_logout(void)
+
+@implementation anidb_c : Object
+
+- (anidb_c *) init
+{
+	tag = NULL;
+	session = NULL;
+	status = NULL;
+	taglen = 0;
+        return self;
+}
+
+- (void) logout
 {
 	size_t len;
 
-	if (session != NULL) {
-		localdb_delete(Session_db, "session");
-		len = snprintf(sbuf, MAX_BUF - 1, "LOGOUT s=%s&tag=%s\n",
-			session, Tag);
-		session = NULL;
-		network_send(sbuf, len);
-		network_recv(0);
+	if (session == NULL)
+		return;
 
-		status = rbuf + Taglen;
-		if ((status[0] != '2') && (status[0] != '4')) {
-			/* try to close all sessions */
-			network_send("LOGOUT\n", 0);
-			network_recv(0);
-		}
+	localdb_delete(Session_db, "session");
+	len = snprintf(sbuf, MAX_BUF - 1, "LOGOUT s=%s&tag=%s\n",
+		session, tag);
+	session = NULL;
+	[network_o send: sbuf: len];
+	[network_o recv: rbuf: 0];
+
+	status = rbuf + taglen;
+	if ((status[0] != '2') && (status[0] != '4')) {
+		/* try to close all sessions */
+		[network_o send: "LOGOUT\n": 0];
+		[network_o recv: rbuf: 0];
 	}
 }
 
-void
-anidb_alive(void)
-{
-	size_t len;
-
-#ifndef WITH_UDP
-	/* TCP gives a welcome */
-	network_recv(0);
-	status = rbuf;
-	if (status[0] != '1') 
-		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
-
-#endif
-
-#ifdef WITH_UDP
-#ifdef WITH_UDP_PING
-	len = snprintf(sbuf, MAX_BUF - 1, "PING\n") + 1;
-	network_send(sbuf, len);
-	network_recv(0);
-#endif
-#endif
-}
-
-void
-anidb_login(void)
+- (void) login
 {
 	size_t len;
 	char *work;
@@ -1334,8 +1357,9 @@ anidb_login(void)
 	time_t tv;
 	time_t valid_from;
 
-	Tag = User;
-	Taglen = strlen(Tag) + 1;
+	tag = User;
+	taglen = strlen(tag) + 1;
+
 	data = localdb_read(Session_db, "session");
 	if (data != NULL) {
 		work = strchr(data, '|');
@@ -1352,10 +1376,10 @@ anidb_login(void)
 
 	len = snprintf(sbuf, MAX_BUF - 1,
 		"AUTH user=%s&pass=%s&protover=2&client=aniupdate&clientver=1&tag=%s\n",
-		User, Password, Tag);
-	network_send(sbuf, len);
-	network_recv(0);
-	status = rbuf + Taglen;
+		User, Password, tag);
+	[network_o send: sbuf: len];
+	[network_o recv: rbuf: 0];
+	status = rbuf + taglen;
 	if (status[0] == '6')
 		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
 	if (status[0] == '5') {
@@ -1363,6 +1387,8 @@ anidb_login(void)
 			errx(EX_SOFTWARE, "Server returns: %-70.70s", rbuf);
 		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
 	}
+
+	localdb_write(Session_db, "session", session);
 	if (status[0] != '2')
 		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
 
@@ -1381,21 +1407,41 @@ anidb_login(void)
 	localdb_write(Session_db, "session", session);
 }
 
-void
-anidb_ping(void)
+- (void) alive
 {
 	size_t len;
 
-	len = snprintf(sbuf, MAX_BUF - 1, "PING tag=%s\n", Tag) + 1;
-	network_send(sbuf, len);
-	network_recv(0);
-	status = rbuf + Taglen;
+#ifndef WITH_UDP
+	/* TCP gives a welcome */
+	[network_o recv: rbuf: 0];
+	status = rbuf;
+	if (status[0] != '1') 
+		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
+
+#endif
+
+#ifdef WITH_UDP
+#ifdef WITH_UDP_PING
+	len = snprintf(sbuf, MAX_BUF - 1, "PING\n") + 1;
+	[network_o send: sbuf: len];
+	[network_o recv: rbuf: 0];
+#endif
+#endif
+}
+
+- (void) ping
+{
+	size_t len;
+
+	len = snprintf(sbuf, MAX_BUF - 1, "PING tag=%s\n", tag) + 1;
+	[network_o send: sbuf: len];
+	[network_o recv: rbuf: 0];
+	status = rbuf + taglen;
 	if (status[0] != '3')
 		warnx("Server returns: %-70.70s", rbuf);
 }
 
-void
-anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
+- (void) add: (const char *) ed2k_link: (MYLIST_TYP *) edit
 {
 	char *size = NULL;
 	char *md4 = NULL;
@@ -1406,7 +1452,7 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 		printf("add: %-70.70s\n", ed2k_link);
 
 	if (session == NULL)
-		anidb_login();
+		[self login];
 
 	rc = ed2klink_to_key(ed2k_link,&size,&md4);
 	if (rc != 0) {
@@ -1420,19 +1466,19 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 		len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%s&viewed=%s"
 			"&source=%s&storage=%s&other=%s&edit=1&tag=%s\n",
 			session, size, md4, edit->ml_state, edit->ml_viewdate,
-			edit->ml_source, edit->ml_storage, edit->ml_other, Tag) + 1;
+			edit->ml_source, edit->ml_storage, edit->ml_other, tag) + 1;
 	} else {
 		len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%d&viewed=%d"
 			"&source=%s&storage=%s&other=%s&tag=%s\n",
 			session, size, md4, Add_state, Add_viewed,
-			Add_source, Add_storage, Add_other, Tag) + 1;
+			Add_source, Add_storage, Add_other, tag) + 1;
 	}
 
 	free(size);
 	free(md4);
-	network_send(sbuf, len);
-	network_recv(0);
-	status = rbuf + Taglen;
+	[network_o send: sbuf: len];
+	[network_o recv: rbuf: 0];
+	status = rbuf + taglen;
 	if (status[0] == '2')
 		return;
 	warnx("Server returns: %-70.70s", rbuf);
@@ -1441,13 +1487,12 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 	if (status[0] != '5')
 		return;
 	if ((status[2] == '0') || (status[2] == '1')) {
-		anidb_logout();
-		anidb_login();
+		[self logout];
+		[self login];
 	}
 }
 
-char *
-anidb_mylist(const char *ed2k_link, int force)
+- (char *) mylist: (const char *) ed2k_link: (int) force
 {
 	char *size = NULL;
 	char *md4 = NULL;
@@ -1474,15 +1519,15 @@ anidb_mylist(const char *ed2k_link, int force)
 	}
 
 	if (session == NULL)
-		anidb_login();
+		[self login];
 
 	len = snprintf(sbuf, MAX_BUF - 1, "MYLIST s=%s&size=%s&ed2k=%s&tag=%s\n",
-		session, size, md4, Tag) + 1;
+		session, size, md4, tag) + 1;
 	free(size);
 	free(md4);
-	network_send(sbuf, len);
-	network_recv(0);
-	status = rbuf + Taglen;
+	[network_o send: sbuf: len];
+	[network_o recv: rbuf: 0];
+	status = rbuf + taglen;
 	if ((status[0] == '2') && (status[1] == '2') && (status[2] == '1')) {
 		/* we have data */
 		data = strchr(status, '\n');
@@ -1500,14 +1545,13 @@ anidb_mylist(const char *ed2k_link, int force)
 	if (status[0] != '5')
 		return NULL;
 	if ((status[2] == '0') || (status[2] == '1')) {
-		anidb_logout();
-		anidb_login();
+		[self logout];
+		[self login];
 	}
 	return NULL;
 }
 
-char *
-anidb_files(const char *ed2k_link, int force)
+- (char *) files: (const char *) ed2k_link: (int) force
 {
 	char *size = NULL;
 	char *md4 = NULL;
@@ -1534,15 +1578,15 @@ anidb_files(const char *ed2k_link, int force)
 	}
 
 	if (session == NULL)
-		anidb_login();
+		[self login];
 
 	len = snprintf(sbuf, MAX_BUF - 1, "FILE s=%s&size=%s&ed2k=%s&tag=%s\n",
-		session, size, md4, Tag) + 1;
+		session, size, md4, tag) + 1;
 	free(size);
 	free(md4);
-	network_send(sbuf, len);
-	network_recv(0);
-	status = rbuf + Taglen;
+	[network_o send: sbuf: len];
+	[network_o recv: rbuf: 0];
+	status = rbuf + taglen;
 	if ((status[0] == '2') && (status[1] == '2') && (status[2] == '0')) {
 		/* we have data */
 		data = strchr(status, '\n');
@@ -1560,11 +1604,13 @@ anidb_files(const char *ed2k_link, int force)
 	if (status[0] != '5')
 		return NULL;
 	if ((status[2] == '0') || (status[2] == '1')) {
-		anidb_logout();
-		anidb_login();
+		[self logout];
+		[self login];
 	}
 	return NULL;
 }
+
+@end
 
 
 void usage(void)
@@ -1639,7 +1685,7 @@ command_options(int argc, const char *const *argv)
 			ch = *(++cptr);
 			switch (ch) {
 			case '-':
-				config_parse_line(Config_box, ++cptr);
+				[config_o parse_line: ++cptr];
 				break;
 			case 'd':
 				Debug = YES;
@@ -1740,7 +1786,7 @@ command_run(int argc, const char *const *argv)
 				field = cptr;
 				break;
 			case 'p': /* ping */
-				anidb_ping();
+				[anidb_o ping];
 				/* FALLTHROUGH */
 			case 'a': /* add to mylist */
 			case 'f': /* read from anidb */
@@ -1756,20 +1802,20 @@ command_run(int argc, const char *const *argv)
 		}
 		switch (fc) {
 		case 'a':
-			anidb_add(cptr, NULL);
+			[anidb_o add: cptr: NULL];
 			break;
 		case 'e':
-			data = anidb_mylist(cptr, NO);
+			data = [anidb_o mylist: cptr: NO];
 			if (data == NULL)
 				break;
 			mylist_decode(&mylist_entry, cptr, data);
 			if ( mylist_edit(&mylist_entry,field) != 0 )
 				 usage();
-			anidb_add(cptr, &mylist_entry);
-			anidb_mylist(cptr, YES);
+			[anidb_o add: cptr: &mylist_entry];
+			[anidb_o mylist: cptr: YES];
 			break;
 		case 'f':
-			data = anidb_files(cptr, NO);
+			data = [anidb_o files: cptr: NO];
 			if (data == NULL)
 				break;
 			if (Quiet != NO)
@@ -1778,7 +1824,7 @@ command_run(int argc, const char *const *argv)
 			info_show(&file_entry);
 			break;
 		case 'r':
-			data = anidb_mylist(cptr, NO);
+			data = [anidb_o mylist: cptr: NO];
 			if (data == NULL)
 				break;
 			if (Quiet != NO)
@@ -1787,22 +1833,22 @@ command_run(int argc, const char *const *argv)
 			mylist_show(&mylist_entry);
 			break;
 		case 'u':
-			data = anidb_mylist(cptr, NO);
+			data = [anidb_o mylist: cptr: NO];
 			if (data == NULL)
 				break;
 			mylist_decode(&mylist_entry, cptr, data);
 			mylist_entry.ml_viewdate = "0";
-			anidb_add(cptr, &mylist_entry);
-			anidb_mylist(cptr, YES);
+			[anidb_o add: cptr: &mylist_entry];
+			[anidb_o mylist: cptr: YES];
 			break;
 		case 'v':
-			data = anidb_mylist(cptr, NO);
+			data = [anidb_o mylist: cptr: NO];
 			if (data == NULL)
 				break;
 			mylist_decode(&mylist_entry, cptr, data);
 			mylist_entry.ml_viewdate = "1";
-			anidb_add(cptr, &mylist_entry);
-			anidb_mylist(cptr, YES);
+			[anidb_o add: cptr: &mylist_entry];
+			[anidb_o mylist: cptr: YES];
 			break;
 		default:
 			usage();
@@ -1814,23 +1860,29 @@ command_run(int argc, const char *const *argv)
 int
 main(int argc, const char *const *argv)
 {
-	config_default(Config_box);
+	config_o = [config_c alloc];
+	[config_o init: Config_box];
+
+	network_o = [network_c alloc];
+	[network_o init];
+
+	anidb_o = [anidb_c alloc];
+	[anidb_o init];
+
 	command_config(argc, argv);
-	config_read();
+	[config_o read: Config_file];
 
 	command_options(argc, argv);
 	config_check();
 
-//	anidb_alive();
+//	[anidb_o alive];
 
 	command_run(argc, argv);
 
-	if (session != NULL)
-		anidb_logout();
-
-	if (connected != NO)
-		network_close();
-
+	[anidb_o logout];
+	[network_o close];
+	[network_o free];
+	[config_o free];
 	return 0;
 }
 
