@@ -227,6 +227,7 @@ static char *session = NULL;
 int taglen = 0;
 
 static const char C_[] = "";
+static const char C_0[] = "0";
 static const char C_SESSION[] = "session";
 static const char C_NEXT_SEND[] = "next_send";
 
@@ -1948,6 +1949,8 @@ command_run(int argc, const char *const *argv)
 			if (data == NULL)
 				break;
 			mylist_decode(&mylist_entry, cptr, data);
+			if (strcmp(mylist_entry.ml_viewdate,C_0) != 0)
+				break;
 			mylist_entry.ml_viewdate = "1";
 			anidb_add(cptr, &mylist_entry);
 			anidb_mylist(cptr, YES);
