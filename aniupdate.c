@@ -1,3 +1,42 @@
+/*---------------------------------------------------------------------------
+
+ Copyright (c) 2004
+	by Dirk Meyer, All rights reserved.
+	Im Grund 4, 34317 Habichtswald, Germany
+	Email: dirk.meyer@dinoex.sub.org
+
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
+ 1. Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+ 2. Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+ 3. Neither the name of the author nor the names of any co-contributors
+    may be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+ THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ SUCH DAMAGE.
+
+-----------------------------------------------------------------------------
+
+	aniupdate - udp client for http://anidb.net/
+	============================================
+
+	$Id$
+
+----------------------------------------------------------------------------*/
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -55,9 +94,46 @@ typedef struct {
 	const char	*def;
 } CONFIG_TYP;
 
+typedef struct {
+	char		*ml_size;
+	char		*ml_md4;
+	const char	*ml_cached;
+	const char	*ml_lid;
+	const char	*ml_fid;
+	const char	*ml_eid;
+	const char	*ml_aid;
+	const char	*ml_gid;
+	const char	*ml_date;
+	const char	*ml_state;
+	const char	*ml_viewdate;
+	const char	*ml_storage;
+	const char	*ml_source;
+	const char	*ml_other;
+} MYLIST_TYP;
+
+typedef struct {
+	char		*f_size;
+	char		*f_md4;
+	const char	*f_cached;
+	const char	*f_fid;
+	const char	*f_aid;
+	const char	*f_eid;
+	const char	*f_gid;
+	const char	*f_state;
+	const char	*f_bytes;
+	const char	*f_ed2khash;
+	const char	*f_name;
+} INFO_TYP;
+
 void string_to_lowercase(char *buffer);
 int string_compare(const char *s1, const char *s2);
 int ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k);
+int mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data);
+void print_date( const char *prefix, const char *seconds );
+void mylist_show(MYLIST_TYP *mylist);
+int mylist_edit(MYLIST_TYP *mylist, const char *changes);
+int info_decode(INFO_TYP *info, const char *ed2k_link, const char *data);
+void info_show(INFO_TYP *info);
 
 FILE *file_open(const char *datei, const char *mode);
 void file_seek(FILE *handle, long bytes, int mode);
@@ -82,6 +158,7 @@ char *localdb_read_ed2k(const char *name, const char *size, const char *md4);
 
 void network_close(void);
 void network_open(void);
+void network_retry(void);
 void network_send(const char *buf, size_t len);
 int network_recv(size_t len);
 
@@ -89,9 +166,9 @@ void anidb_logout(void);
 void anidb_alive(void);
 void anidb_login(void);
 void anidb_ping(void);
-void anidb_add(const char *ed2k_link, int edit);
-char *anidb_mylist(const char *ed2k_link);
-char *anidb_files(const char *ed2k_link);
+void anidb_add(const char *ed2k_link, MYLIST_TYP *edit);
+char *anidb_mylist(const char *ed2k_link, int force);
+char *anidb_files(const char *ed2k_link, int force);
 
 void usage(void);
 void command_config(int argc, const char *const *argv);
@@ -99,7 +176,11 @@ void command_options(int argc, const char *const *argv);
 void command_run(int argc, const char *const *argv);
 int main(int argc, const char *const *argv);
 
+static const char *Add_source = NULL;
+static const char *Add_storage = NULL;
+static const char *Add_other = NULL;
 static const char *Config_file = NULL;
+static const char *Date_format = NULL;
 static const char *Server_name = NULL;
 static const char *Files_db = NULL;
 static const char *Mylist_db = NULL;
@@ -107,16 +188,22 @@ static const char *User = NULL;
 static const char *Password = NULL;
 static int Debug = NO;
 static int Verbose = NO;
+static int Quiet = NO;
 static int Add_state;
 static int Add_viewed;
 static int Cache_ignore;
 static int Remote_port;
 static int Local_port;
+static int Retrys;
 
+static int connected = NO;
 static int s = -1;
 static struct sockaddr_in sock_in;
 static struct sockaddr_in local_in;
 static time_t next_send = 0;
+static size_t retry_count = 0;
+static size_t retry_len = 0;
+static const char *retry_buf = NULL;
 
 static char rbuf[MAX_BUF];
 static char sbuf[MAX_BUF];
@@ -128,25 +215,59 @@ static char *session = NULL;
 static char *status = NULL;
 int Taglen = 0;
 
+static const char C_[] = "";
+
 static long Config_box_anzahl;
 CONFIG_TYP      Config_box[] = {
 { -1, { &Config_box_anzahl   }, "_Config_box_anzahl", NULL },
+{ 0, { &Add_other            }, "Add_other",          C_ },
+{ 0, { &Add_source           }, "Add_source",         C_ },
 { 1, { &Add_state            }, "Add_state",          "1" },
+{ 0, { &Add_storage          }, "Add_storage",        C_ },
 { 1, { &Add_viewed           }, "Add_viewed",         NULL },
 { 1, { &Cache_ignore         }, "Cache_ignore",       NULL },
 { 0, { &Config_file          }, "Config_file",        ".aniupdate" },
+{ 0, { &Date_format          }, "Date_format",        "%Y-%m-%d %H:%M:%S" },
 { 1, { &Debug                }, "Debug",              NULL },
 { 0, { &Files_db             }, "Files_db",           "files.db" },
 { 1, { &Local_port           }, "Local_port",         "9000" },
 { 0, { &Mylist_db            }, "Mylist_db",          "mylist.db" },
 { 0, { &Password             }, "Password",           NULL },
+{ 1, { &Quiet                }, "Quiet",              NULL },
 { 1, { &Remote_port          }, "Remote_port",        "9000" },
+{ 1, { &Retrys               }, "Retrys",             "2" },
 { 0, { &Server_name          }, "Server_name",        "anidb.ath.cx" },
 { 0, { &User                 }, "User",               NULL },
 { 1, { &Verbose              }, "Verbose",            NULL },
 { -1, { NULL }, NULL, NULL }
 };
 
+#define	MYLIST_MAX_STATE	6
+static const char *mylist_states[] = {
+	"unknown",
+	"on hdd",
+	"on cd",
+	"deleted",
+	"shared",
+	"release"
+};
+
+static const char *info_crc[] = {
+	"unknown",
+	"ok",
+	"bad",
+	"unknown"
+};
+
+typedef struct {
+	unsigned int	crc:2;
+	unsigned int	version:4;
+} INFO_STATE_TYP;
+
+typedef union {
+	unsigned int	numeric;
+	INFO_STATE_TYP	value;
+} INFO_STATE_CONVERT_TYP;
 
 void
 string_to_lowercase(char *buffer)
@@ -259,6 +380,268 @@ out:
 		return 6;
 
 	return 0;
+}
+
+int
+mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data)
+{
+	int rc;
+	int state = 0;
+	char *buffer;
+	char *work;
+
+	bzero((char *)mylist, sizeof(*mylist));
+	rc = ed2klink_to_key(ed2k_link,&(mylist->ml_size),&(mylist->ml_md4));
+	if (rc != 0) {
+		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
+		return 1;
+	}
+	if ((mylist->ml_size == NULL) || (mylist->ml_md4 == NULL))
+		return 1;
+
+	buffer = strdup(data);
+	if (buffer == NULL)
+		errx(EX_CANTCREAT, "out of memory in mylist_decode: %-70.70s", ed2k_link);
+
+	mylist->ml_cached = buffer;
+	work = strchr(buffer, '|');
+	while (work != NULL) {
+		*(work++) = 0;
+		switch (state++) {
+		case 0:
+			mylist->ml_lid = work;
+			break;
+		case 1:
+			mylist->ml_fid = work;
+			break;
+		case 2:
+			mylist->ml_eid = work;
+			break;
+		case 3:
+			mylist->ml_aid = work;
+			break;
+		case 4:
+			mylist->ml_gid = work;
+			break;
+		case 5:
+			mylist->ml_date = work;
+			break;
+		case 6:
+			mylist->ml_state = work;
+			break;
+		case 7:
+			mylist->ml_viewdate = work;
+			break;
+		case 8:
+			mylist->ml_storage = work;
+			break;
+		case 9:
+			mylist->ml_source = work;
+			break;
+		case 10:
+			mylist->ml_other = work;
+			break;
+		default:
+			return 0;
+		}
+		if (*work == 0)
+			return 0;
+		work = strchr(work, '|');
+	}
+	return 0;
+}
+
+void
+print_date( const char *prefix, const char *seconds )
+{
+	long lsec;
+	time_t now;
+
+	if ( seconds == NULL )
+		return;
+
+	lsec = atol(seconds);
+	if (lsec == 0)
+		return;
+
+	now = lsec;
+	strftime(kbuf, MAX_BUF, Date_format, localtime(&now));
+	printf("%s%s\n", prefix, kbuf);
+
+}
+
+void
+mylist_show(MYLIST_TYP *mylist)
+{
+	printf("size: %s\n", mylist->ml_size);
+	printf("ed2khash: %s\n", mylist->ml_md4);
+	printf("cached: %s\n", mylist->ml_cached);
+	print_date("cachedtext: ", mylist->ml_cached);
+	printf("lid: %s\n", mylist->ml_lid);
+	printf("fid: %s\n", mylist->ml_fid);
+	printf("eid: %s\n", mylist->ml_eid);
+	printf("aid: %s\n", mylist->ml_aid);
+	printf("gid: %s\n", mylist->ml_gid);
+	printf("date: %s\n", mylist->ml_date);
+	print_date("datetext: ", mylist->ml_date);
+	printf("state: %s\n", mylist->ml_state);
+	if (mylist->ml_state != NULL) {
+		int st = -1;
+		st = atoi(mylist->ml_state);
+		if ((st >= 0) && (st < MYLIST_MAX_STATE))
+			printf("statetext: %s\n", mylist_states[st]);
+	}
+	printf("viewdate: %s\n", mylist->ml_viewdate);
+	print_date("viewdatetext: ", mylist->ml_viewdate);
+	printf("storage: %s\n", mylist->ml_storage);
+	printf("source: %s\n", mylist->ml_source);
+	printf("other: %s\n", mylist->ml_other);
+	printf("\n");
+}
+
+int
+mylist_edit(MYLIST_TYP *mylist, const char *changes)
+{
+	char *buffer;
+	char *value;
+	char ch;
+
+	if (changes == NULL)
+		return EX_USAGE;
+
+	buffer = strdup(changes);
+	if (buffer == NULL)
+		errx(EX_CANTCREAT, "out of memory in mylist_edit: %-70.70s", changes);
+
+	value = strchr(buffer, '=');
+	if (value == NULL)
+		return EX_USAGE;
+
+	*(value++) = 0;
+
+	if (strlen(buffer) == 0)
+		return EX_USAGE;
+
+	ch = *buffer;
+	switch (ch) {
+	case 'o': /* edit other */
+		mylist->ml_other = value;
+		return 0;
+	case 's':
+		if (strcmp(buffer,"source") == 0) {
+			mylist->ml_source = value;
+			return 0;
+		};
+		if (strcmp(buffer,"storage") == 0) {
+			mylist->ml_storage = value;
+			return 0;
+		};
+		break;
+	}
+	return EX_USAGE;
+}
+
+int
+info_decode(INFO_TYP *info, const char *ed2k_link, const char *data)
+{
+	int rc;
+	int state = 0;
+	char *buffer;
+	char *work;
+
+	bzero((char *)info, sizeof(*info));
+	rc = ed2klink_to_key(ed2k_link,&(info->f_size),&(info->f_md4));
+	if (rc != 0) {
+		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
+		return 1;
+	}
+	if ((info->f_size == NULL) || (info->f_md4 == NULL))
+		return 1;
+
+	buffer = strdup(data);
+	if (buffer == NULL)
+		errx(EX_CANTCREAT, "out of memory in info: %-70.70s", ed2k_link);
+
+	info->f_cached = buffer;
+	work = strchr(buffer, '|');
+	while (work != NULL) {
+		*(work++) = 0;
+		switch (state++) {
+		case 0:
+			info->f_fid = work;
+			break;
+		case 1:
+			info->f_aid = work;
+			break;
+		case 2:
+			info->f_eid = work;
+			break;
+		case 3:
+			info->f_gid = work;
+			break;
+		case 4:
+			info->f_state = work;
+			break;
+		case 5:
+			info->f_bytes = work;
+			break;
+		case 6:
+			info->f_ed2khash = work;
+			break;
+		case 7:
+			info->f_name = work;
+			break;
+		default:
+			return 0;
+		}
+		if (*work == 0)
+			return 0;
+		work = strchr(work, '|');
+	}
+	return 0;
+}
+
+void
+info_show(INFO_TYP *info)
+{
+	INFO_STATE_CONVERT_TYP decoder;
+
+	printf("size: %s\n", info->f_size);
+	printf("ed2khash: %s\n", info->f_md4);
+	printf("cached: %s\n", info->f_cached);
+	print_date("cachedtext: ", info->f_cached);
+	printf("fid: %s\n", info->f_fid);
+	printf("aid: %s\n", info->f_aid);
+	printf("eid: %s\n", info->f_eid);
+	printf("gid: %s\n", info->f_gid);
+	printf("state: %s\n", info->f_state);
+	if (info->f_state != NULL) {
+		int st = -1;
+		int version = 1;
+		st = atoi(info->f_state);
+		decoder.numeric = st;
+		printf("crc: %s\n", info_crc[decoder.value.crc]);
+		switch (decoder.value.version) {
+		case 1:
+			version = 2;
+			break;
+		case 2:
+			version = 3;
+			break;
+		case 4:
+			version = 4;
+			break;
+		case 8:
+			version = 5;
+			break;
+		}
+		printf("version: %d\n", version);
+	}
+	if (string_compare(info->f_size,info->f_bytes) != 0 )
+		printf("anidb size: %s\n", info->f_bytes);
+	if (string_compare(info->f_md4,info->f_ed2khash) != 0 )
+		printf("anidb ed2khash: %s\n", info->f_ed2khash);
+	printf("filename: %s\n", info->f_name);
 }
 
 
@@ -423,7 +806,6 @@ config_set_var(CONFIG_TYP *config, const char *key, char *value)
 			case CT_LOWER_STRING:
 				string_to_lowercase(value);
 				/* FALLTHROUGH */
-				/*@fallthrough@*/
 			case CT_STRING:
 				*(config[i].u.cvar) =
 					value;
@@ -559,7 +941,7 @@ localdb_cleanup(const char *name, time_t vaild_from)
 		ret = db->seq(db, &key, &data, R_FIRST);
 		while (!ret) {
 			data.size = data.size < 16 ? data.size : 15;
-			strncpy(fbuf,data.data, data.size);
+			strncpy(fbuf, data.data, data.size);
 			fbuf[data.size] = 0;
 			tv = atol(fbuf);
 			if (tv < vaild_from) {
@@ -584,7 +966,9 @@ localdb_write(const char *name, const char *hash, const char *value)
 	DB *db;
 	DBT key, data;
 	char *hash2;
-	int fd, st;
+	int fd;
+	int st;
+	int rc;
 
 	db = dbopen(name, O_RDWR|O_CREAT, 0644, DB_HASH, NULL);
 	if (db == NULL)
@@ -606,10 +990,12 @@ localdb_write(const char *name, const char *hash, const char *value)
 			errx(EX_CANTCREAT, "out of mem for database");
 		key.data = strdup(hash);
 		key.size = strlen(key.data);
-		sprintf(fbuf, "%lu|%s", (long)time(NULL), value);
+		snprintf(fbuf, MAX_BUF, "%lu|%s", (long)time(NULL), value);
 		data.data = fbuf;
 		data.size = strlen(fbuf);
-		db->put(db, &key, &data, 0);
+		rc = db->put(db, &key, &data, 0);
+		if ((rc != 0) && (rc != 1))
+			warn("database write returns %d", rc);
 		db->sync(db,0);
 		free(hash2);
 		st = flock(fd, LOCK_UN);
@@ -634,6 +1020,8 @@ localdb_read(const char *name, const char *hash)
 	DB *db;
 	DBT key, data;
 	char *hash2;
+	char *str = NULL;
+	int rc;
 
 	db = dbopen(name, O_RDONLY, 0644, DB_HASH, NULL);
 	if (db == NULL) {
@@ -648,12 +1036,27 @@ localdb_read(const char *name, const char *hash)
 		errx(EX_CANTCREAT, "out of mem for database");
 	key.data = strdup(hash);
 	key.size = strlen(key.data);
-	data.data = fbuf;
-	data.size = strlen(fbuf);
-	db->get(db, &key, &data, 0);
+	data.data = NULL;
+	data.size = 0;
+	data.size = sizeof(fbuf) - 1;
+	rc = db->get(db, &key, &data, 0);
+	if (rc == 0) {
+		if ((data.data != NULL) && (data.size > 0) && (data.size < sizeof(fbuf))) {
+			strncpy(fbuf, data.data, data.size);
+			fbuf[data.size] = 0;
+			if ( fbuf[data.size - 1] == '\n')
+				fbuf[data.size - 1] = 0;
+			str = fbuf;
+		} else {
+			warnx("database get failed, size = %d", data.size);
+		}
+	} else {
+		if (rc != 1)
+			warn("database read returns %d", rc);
+	}
 	free(hash2);
 	db->close(db);
-	return fbuf;
+	return str;
 }
 
 char *
@@ -732,6 +1135,7 @@ network_open(void)
 	if (connect(s, (struct sockaddr *)(&sock_in), sizeof(sock_in)) < 0)
 		err(EX_OSERR, "cannot connect");
 
+	connected = YES;
 }
 
 void
@@ -739,10 +1143,11 @@ network_close(void)
 {
 	int rc;
 	rc = shutdown(s, SHUT_RDWR);
+	connected = NO;
 }
 
 void
-network_send(const char *buf, size_t len)
+network_retry(void)
 {
 #ifdef USE_WRITE
 	struct iovec iov[2];
@@ -751,36 +1156,52 @@ network_send(const char *buf, size_t len)
 	long llen;
 	long delay;
 
-	if (len == 0)
-		len = strlen(buf) + 1;
-	llen = len;
+	if (retry_buf == NULL)
+		err(EX_OSERR, "retry failed");
 
+	llen = retry_len;
 	now = time(NULL);
 	delay = next_send - now;
 	if (delay > 0)
 		sleep((unsigned)delay);
 
 	if (Debug != NO)
-		puts(buf);
+		puts(retry_buf);
 
 #ifdef USE_WRITE
-	iov[0].iov_base = buf;
-	iov[0].iov_len = len;
+	iov[0].iov_base = retry_buf;
+	iov[0].iov_len = retry_len;
 	if (writev(s, iov, 1) != llen)
 		err(EX_OSERR, "write failed");
 #else
-	if (send(s, buf, len, 0) != llen)
+	if (send(s, retry_buf, retry_len, 0) != llen)
 		err(EX_OSERR, "send failed");
 #endif
 
 	next_send = time(NULL) + MIN_DELAY;
 }
 
+void
+network_send(const char *buf, size_t len)
+{
+	if (connected == NO)
+		network_open();
+
+	if (len == 0)
+		len = strlen(buf) + 1;
+	retry_len = len;
+	retry_count = Retrys;
+	retry_buf = buf;
+	network_retry();
+}
 
 int
 network_recv(size_t len)
 {
 	long llen;
+
+	if (connected == NO)
+		network_open();
 
 	if (len == 0)
 		len = MAX_BUF - 1;
@@ -788,13 +1209,21 @@ network_recv(size_t len)
 	bzero(rbuf, sizeof(rbuf));
 #ifdef USE_READ
 	llen = read(s, rbuf, len);
-	if (llen < 0)
-		err(EX_OSERR, "read %ld", llen);
 #else
 	llen = recv(s, rbuf, len, 0);
-	if (llen < 0)
+#endif
+	if (llen < 0) {
+#ifdef WITH_UDP
+		if ((errno != EAGAIN) || (retry_count == 0) || (retry_len == 0))
+			err(EX_OSERR, "recv %ld", llen);
+		warn("recv %ld", llen);
+		retry_count --;
+		network_retry();
+		return network_recv(len);
+#else
 		err(EX_OSERR, "recv %ld", llen);
 #endif
+	}
 
 	if (llen == 0)
 		network_recv(len);
@@ -901,16 +1330,18 @@ anidb_ping(void)
 }
 
 void
-anidb_add(const char *ed2k_link, int edit)
+anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 {
 	char *size = NULL;
 	char *md4 = NULL;
-	const char *extra = "";
 	size_t len;
 	int rc;
 
 	if (Verbose != NO)
-		warnx("add: %-70.70s", ed2k_link);
+		printf("add: %-70.70s\n", ed2k_link);
+
+	if (session == NULL)
+		anidb_login();
 
 	rc = ed2klink_to_key(ed2k_link,&size,&md4);
 	if (rc != 0) {
@@ -920,14 +1351,18 @@ anidb_add(const char *ed2k_link, int edit)
 	if ((size == NULL) || (md4 == NULL))
 		return;
 
-#if 0
-MYLISTADD size={int4 size}&ed2k={str ed2khash}[&state={int2 state}&viewed={boolean viewed}&source={str source}&storage={str storage}&other={str other}][&edit=1]
-#endif
+	if (edit != NULL) {
+		len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%s&viewed=%s"
+			"&source=%s&storage=%s&other=%s&edit=1&tag=%s\n",
+			session, size, md4, edit->ml_state, edit->ml_viewdate,
+			edit->ml_source, edit->ml_storage, edit->ml_other, Tag) + 1;
+	} else {
+		len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%d&viewed=%d"
+			"&source=%s&storage=%s&other=%s&tag=%s\n",
+			session, size, md4, Add_state, Add_viewed,
+			Add_source, Add_storage, Add_other, Tag) + 1;
+	}
 
-	if (edit != NO)
-		extra = "&edit=1";
-	len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%d&viewed=%d%s&tag=%s\n",
-		session, size, md4, Add_state, Add_viewed, extra, Tag) + 1;
 	free(size);
 	free(md4);
 	network_send(sbuf, len);
@@ -947,16 +1382,17 @@ MYLISTADD size={int4 size}&ed2k={str ed2khash}[&state={int2 state}&viewed={boole
 }
 
 char *
-anidb_mylist(const char *ed2k_link)
+anidb_mylist(const char *ed2k_link, int force)
 {
 	char *size = NULL;
 	char *md4 = NULL;
 	char *data;
+	char *end;
 	size_t len;
 	int rc;
 
 	if (Verbose != NO)
-		warnx("add: %-70.70s", ed2k_link);
+		printf("add: %-70.70s\n", ed2k_link);
 
 	rc = ed2klink_to_key(ed2k_link,&size,&md4);
 	if (rc != 0) {
@@ -966,11 +1402,14 @@ anidb_mylist(const char *ed2k_link)
 	if ((size == NULL) || (md4 == NULL))
 		return NULL;
 
-	if (Cache_ignore == NO) {
+	if ((Cache_ignore == NO) && (force == NO)) {
 		data = localdb_read_ed2k(Mylist_db, size, md4);
 		if (data != NULL)
 			return data;
 	}
+
+	if (session == NULL)
+		anidb_login();
 
 	len = snprintf(sbuf, MAX_BUF - 1, "MYLIST s=%s&size=%s&ed2k=%s&tag=%s\n",
 		session, size, md4, Tag) + 1;
@@ -984,8 +1423,11 @@ anidb_mylist(const char *ed2k_link)
 		data = strchr(status, '\n');
 		if (data == NULL)
 			data = status + 3;
-		localdb_write_ed2k(Mylist_db, size, md4, ++data);
-		return data;
+		end = strchr(++data, '\n');
+		if (end != NULL)
+			*end = 0;
+		localdb_write_ed2k(Mylist_db, size, md4, data);
+		return fbuf;
 	}
 	warnx("Server returns: %-70.70s", rbuf);
 	if ((status[0] == '3') || (status[0] == '4'))
@@ -1000,16 +1442,17 @@ anidb_mylist(const char *ed2k_link)
 }
 
 char *
-anidb_files(const char *ed2k_link)
+anidb_files(const char *ed2k_link, int force)
 {
 	char *size = NULL;
 	char *md4 = NULL;
 	char *data;
+	char *end;
 	size_t len;
 	int rc;
 
 	if (Verbose != NO)
-		warnx("add: %-70.70s", ed2k_link);
+		printf("add: %-70.70s\n", ed2k_link);
 
 	rc = ed2klink_to_key(ed2k_link,&size,&md4);
 	if (rc != 0) {
@@ -1019,11 +1462,14 @@ anidb_files(const char *ed2k_link)
 	if ((size == NULL) || (md4 == NULL))
 		return NULL;
 
-	if (Cache_ignore == NO) {
+	if ((Cache_ignore == NO) && (force == NO)) {
 		data = localdb_read_ed2k(Files_db, size, md4);
 		if (data != NULL)
 			return data;
 	}
+
+	if (session == NULL)
+		anidb_login();
 
 	len = snprintf(sbuf, MAX_BUF - 1, "FILE s=%s&size=%s&ed2k=%s&tag=%s\n",
 		session, size, md4, Tag) + 1;
@@ -1037,7 +1483,10 @@ anidb_files(const char *ed2k_link)
 		data = strchr(status, '\n');
 		if (data == NULL)
 			data = status + 3;
-		localdb_write_ed2k(Files_db, size, md4, ++data);
+		end = strchr(++data, '\n');
+		if (end != NULL)
+			*end = 0;
+		localdb_write_ed2k(Files_db, size, md4, data);
 		return data;
 	}
 	warnx("Server returns: %-70.70s", rbuf);
@@ -1052,65 +1501,6 @@ anidb_files(const char *ed2k_link)
 	return NULL;
 }
 
-#if 0
-
-       by size+ed2k hash:
-            MYLIST size={int4 size}&ed2k={str ed2khash} 
-
-
-REPLY:
-
-            221 MYLIST
-            {int4 lid}|{int4 fid}|{int4 eid}|{int4 aid}|{int4 gid}|{int4 date}|{int2 state}|{int4 viewdate}|{str storage}|{str source}|{str other}
-      OR
-            321 NO SUCH ENTRY 
-
-
-INFO:
-
-      the state field provides information about the location and sharing state of a file in mylist.
-      state:
-          o 0 - unknown - state is unknown or the user doesnt want to provide this information
-          o 1 - on hdd - the file is stored on hdd (but is not shared)
-          o 2 - on cd - the file is stored on cd
-          o 3 - deleted - the file has been deleted or is not available for other reasons (i.e. reencoded)
-          o 4 - shared - the file is stored on hdd and shared
-          o 5 - release - the file is stored on hdd and shared on release priority
-
-      If files are added after hashing, a client should specify the state as 1 (on hdd) (if the user doesnt explicitly select something else). 
-
-
-
-
-FILE size={int4 size}&ed2k={str ed2khash} 
-
-REPLY:
-
-            220 FILE
-            {int4 fid}|{int4 aid}|{int4 eid}|{int4 gid}|{int4 state}|{int4 size}|{str ed2k}|{str anidbfilename}
-      OR
-            320 NO SUCH FILE 
-
-
-INFO:
-
-      fid, aid, eid, gid are the unique ids for the file, anime, ep, group entries at anidb.
-      You can use those to create links to the corresponding pages at anidb.
-
-      file state:
-      bit / int value 	meaning
-      1 / 1 	FILE_CRCOK: file matched official crc (displayed with green background in anidb)
-      2 / 2 	FILE_CRCERR: file DID NOT match official crc (displayed with red background in anidb)
-      3 / 4 	FILE_ISV2: file is version 2
-      4 / 8 	FILE_ISV3: file is version 3
-      5 / 16 	FILE_ISV4: file is version 4
-      6 / 32 	FILE_ISV5: file is version 5
-
-
-#endif
-
-
-
 
 void usage(void)
 {
@@ -1119,22 +1509,23 @@ void usage(void)
 " Usage: aniupdate [options] [...] commands [...]\n"
 "\n"
 " options:\n"
-"--<name>=<value>  overrite config with given value\n"
 "-debug            show datagramms\n"
+"-verbose          show files processed\n"
+"-quiet            don't print data\n"
 "-f <config>       set name of config file, default '.aniudate'\n"
+"--<name>=<value>  overrite config with given value\n"
 "-local <port>     set local port number, default 9000\n"
 "-remote <port>    set remote port number, default 9000\n"
 "-server <name>    set remote host, default anidb.ath.cx\n"
 "-user             set userid\n"
-"-verbose          show files processed\n"
-"\n"
 "\n"
 " commands:\n"
 "+ping                    test communication\n"
 "+add ed2klink [...]      add files to mylist\n"
 "+read ed2klink [...]     read mylist info\n"
-"+write ed2klink [...]    write mylist info\n"
-"+view ed2klink [...]     set files as viewed\n"
+"+view ed2klink [...]     set files as viewed (date will not be preserved)\n"
+"+unview ed2klink [...]   set files as unviewed\n"
+"+edit key=value ed2klink [...]   change a field in mylist\n"
 "\n"
 "\n");
 	exit(EX_USAGE);
@@ -1157,6 +1548,9 @@ command_config(int argc, const char *const *argv)
 			case 'f':
 				GET_NEXT_DATA(cptr);
 				Config_file = cptr;
+				break;
+			case 'q':
+				Quiet = YES;
 				break;
 			case 'v':
 				Verbose = YES;
@@ -1199,6 +1593,9 @@ command_options(int argc, const char *const *argv)
 				GET_NEXT_DATA(cptr);
 				Password = cptr;
 				break;
+			case 'q':
+				Quiet = YES;
+				break;
 			case 's':
 				GET_NEXT_DATA(cptr);
 				Server_name = cptr;
@@ -1219,12 +1616,16 @@ command_options(int argc, const char *const *argv)
 		if (*cptr == '+') {
 			ch = *(++cptr);
 			switch (ch) {
-			case 'a': /* add to mylist */
 			case 'e': /* edit mylist */
+				GET_NEXT_DATA(cptr);
+				fc = ch;
+				break;
+			case 'a': /* add to mylist */
 			case 'f': /* read from anidb */
 			case 'p': /* ping */
 			case 'r': /* read from mylist */
-			case 'w': /* write to mylist */
+			case 'u': /* set unviewied in mylist */
+			case 'v': /* set viewied in mylist */
 				fc = ch;
 				break;
 			default:
@@ -1238,7 +1639,8 @@ command_options(int argc, const char *const *argv)
 		case 'e':
 		case 'f':
 		case 'r':
-		case 'w':
+		case 'u':
+		case 'v':
 			break;
 		default:
 			usage();
@@ -1254,6 +1656,10 @@ command_run(int argc, const char *const *argv)
 	const char *cptr;
 	char ch;
 	char fc = 0;
+	const char *data;
+	MYLIST_TYP mylist_entry;
+	INFO_TYP file_entry;
+	const char *field = NULL;
 
 	while (--argc > 0) {
 		cptr = *(++argv);
@@ -1263,13 +1669,19 @@ command_run(int argc, const char *const *argv)
 		if (*cptr == '+') {
 			ch = *(++cptr);
 			switch (ch) {
+			case 'e': /* edit mylist */
+				fc = ch;
+				GET_NEXT_DATA(cptr);
+				field = cptr;
+				break;
 			case 'p': /* ping */
 				anidb_ping();
+				/* FALLTHROUGH */
 			case 'a': /* add to mylist */
-			case 'e': /* edit mylist */
 			case 'f': /* read from anidb */
 			case 'r': /* read from mylist */
-			case 'w': /* write to mylist */
+			case 'u': /* set unviewied in mylist */
+			case 'v': /* set viewied in mylist */
 				fc = ch;
 				break;
 			default:
@@ -1279,19 +1691,53 @@ command_run(int argc, const char *const *argv)
 		}
 		switch (fc) {
 		case 'a':
-			anidb_add(cptr, NO);
+			anidb_add(cptr, NULL);
 			break;
 		case 'e':
-			anidb_mylist(cptr);
-			anidb_add(cptr, YES);
+			data = anidb_mylist(cptr, NO);
+			if (data == NULL)
+				break;
+			mylist_decode(&mylist_entry, cptr, data);
+			if ( mylist_edit(&mylist_entry,field) != 0 )
+				 usage();
+			anidb_add(cptr, &mylist_entry);
+			anidb_mylist(cptr, YES);
 			break;
 		case 'f':
-			anidb_files(cptr);
+			data = anidb_files(cptr, NO);
+			if (data == NULL)
+				break;
+			if (Quiet != NO)
+				break;
+			info_decode(&file_entry, cptr, data);
+			info_show(&file_entry);
 			break;
 		case 'r':
-			anidb_mylist(cptr);
+			data = anidb_mylist(cptr, NO);
+			if (data == NULL)
+				break;
+			if (Quiet != NO)
+				break;
+			mylist_decode(&mylist_entry, cptr, data);
+			mylist_show(&mylist_entry);
 			break;
-		case 'w':
+		case 'u':
+			data = anidb_mylist(cptr, NO);
+			if (data == NULL)
+				break;
+			mylist_decode(&mylist_entry, cptr, data);
+			mylist_entry.ml_viewdate = "0";
+			anidb_add(cptr, &mylist_entry);
+			anidb_mylist(cptr, YES);
+			break;
+		case 'v':
+			data = anidb_mylist(cptr, NO);
+			if (data == NULL)
+				break;
+			mylist_decode(&mylist_entry, cptr, data);
+			mylist_entry.ml_viewdate = "1";
+			anidb_add(cptr, &mylist_entry);
+			anidb_mylist(cptr, YES);
 			break;
 		default:
 			usage();
@@ -1310,14 +1756,16 @@ main(int argc, const char *const *argv)
 	command_options(argc, argv);
 	config_check();
 
-	network_open();
-	anidb_alive();
-	anidb_login();
+//	anidb_alive();
 
 	command_run(argc, argv);
 
-	anidb_logout();
-	network_close();
+	if (session != NULL)
+		anidb_logout();
+
+	if (connected != NO)
+		network_close();
+
 	return 0;
 }
 
