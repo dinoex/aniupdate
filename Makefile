@@ -1,5 +1,6 @@
 
 NO_WARN=	yes
+#CC=	gcc33
 
 CFLAGS+=	-g
 LDFLAGS+=	-g
@@ -22,7 +23,7 @@ CFLAGS+=	-Wformat
 CFLAGS+=	-Wimplicit
 CFLAGS+=	-Wimplicit-function-delcaration
 CFLAGS+=	-Wimplicit-int
-CFLAGS+=	-Winline
+#CFLAGS+=	-Winline
 #CFLAGS+=	-Wlong-long
 CFLAGS+=	-Wmissing-declarations
 CFLAGS+=	-Wmissing-prototypes
@@ -47,12 +48,25 @@ CFLAGS+=	-Wwrite-strings
 
 DBS=	mylist files
 
-all:	aniupdate ${DBS}
+all:	aniupdate ${DBS} names.db
 
 .for i in ${DBS}
 ${i}:	${i}.db
 	makemap -u hash ${i}.db >${.TARGET}
 
 .endfor
+
+names:	/data/anime/db/alle2dk names.awk
+	awk -f names.awk /data/anime/db/alle2dk >${.TARGET}
+
+names.db:	names
+	makemap -f hash ${.TARGET} < names
+
+PROG=	aniupdate
+SRCS=	aniupdate.m
+
+NOMAN=YES
+
+.include <bsd.prog.mk>
 
 # eof
