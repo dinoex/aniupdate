@@ -50,3 +50,15 @@ $ makemap -u hash files.db
 
 -----------------------------------------------------------------------------
 
+edit database by hand:
+
+$ makemap -u hash files.db >files
+$ vim files
+$ makemap hash files.db <files
+
+delete entrys by hand:
+
+$ editmap -x hash files.db '<size>|<ed2khash>'
+
+-----------------------------------------------------------------------------
+
