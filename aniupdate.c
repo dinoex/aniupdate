@@ -1487,7 +1487,7 @@ anidb_files(const char *ed2k_link, int force)
 		if (end != NULL)
 			*end = 0;
 		localdb_write_ed2k(Files_db, size, md4, data);
-		return data;
+		return fbuf;
 	}
 	warnx("Server returns: %-70.70s", rbuf);
 	if ((status[0] == '3') || (status[0] == '4'))
