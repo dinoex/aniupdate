@@ -128,13 +128,6 @@ typedef struct {
 
 void string_to_lowercase(char *buffer);
 int string_compare(const char *s1, const char *s2);
-int ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k);
-int mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data);
-void print_date(const char *prefix, const char *seconds);
-void mylist_show(MYLIST_TYP *mylist);
-int mylist_edit(MYLIST_TYP *mylist, const char *changes);
-int info_decode(INFO_TYP *info, const char *ed2k_link, const char *data);
-void info_show(INFO_TYP *info);
 
 FILE *file_open(const char *datei, const char *mode);
 void file_seek(FILE *handle, long bytes, int mode);
@@ -197,6 +190,14 @@ char *localdb_read_ed2k(const char *name, const char *size, const char *md4);
 
 network_c *network_o;
 
+int ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k);
+int mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data);
+void print_date(const char *prefix, const char *seconds);
+void mylist_show(MYLIST_TYP *mylist);
+int mylist_edit(MYLIST_TYP *mylist, const char *changes);
+int info_decode(INFO_TYP *info, const char *ed2k_link, const char *data);
+void info_show(INFO_TYP *info);
+
 @interface anidb_c : Object
 {
 	const char *tag;
@@ -239,6 +240,7 @@ static const char *Server_name = NULL;
 static const char *Session_db = NULL;
 static const char *Files_db = NULL;
 static const char *Mylist_db = NULL;
+static const char *Names_db = NULL;
 static const char *User = NULL;
 static const char *Password = NULL;
 static int Debug = NO;
@@ -276,6 +278,7 @@ CONFIG_TYP      Config_box[] = {
 { 1, { &Keep_session         }, "Keep_session",       NULL },
 { 1, { &Local_port           }, "Local_port",         "9000" },
 { 0, { &Mylist_db            }, "Mylist_db",          "mylist.db" },
+{ 0, { &Names_db             }, "Names_db",           "names.db" },
 { 0, { &Password             }, "Password",           NULL },
 { 1, { &Quiet                }, "Quiet",              NULL },
 { 1, { &Remote_port          }, "Remote_port",        "9000" },
@@ -361,338 +364,6 @@ string_compare(const char *s1, const char *s2)
 		return 1;
 	else
 		return (c1 - c2);
-}
-
-int
-ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k)
-{
-	char *work;
-	char *end;
-
-	*size = NULL;
-	*ed2k = NULL;
-
-/*
-
-in:
-ed2k://|file|[PM]Princess_Tutu_13[A0BC1BC8].avi|146810880|0436df97e7fe25b620edb25380717479|
-
-out:
-146810880
-0436df97e7fe25b620edb25380717479
-
-*/
-
-	/* ed2k: */
-	work = strchr(ed2k_link, ':');
-	if (work == NULL)
-		return 1;
-
-	/* //| */
-	work = strchr(work, '|');
-	if (work == NULL)
-		return 2;
-
-	/* file| */
-	work = strchr(work + 1, '|');
-	if (work == NULL)
-		return 3;
-
-	/* [PM]Princess_Tutu_13[A0BC1BC8].avi| */
-	work = strchr(work + 1, '|');
-	if (work == NULL)
-		return 4;
-
-	strlcpy(ksize, work + 1, sizeof(ksize));
-	*size = ksize;
-	end = strchr(*size, '|');
-	if (end != NULL)
-		*end = 0;
-
-	/* 146810880| */
-	work = strchr(work + 1, '|');
-	if (work == NULL)
-		return 5;
-
-	strlcpy(khash, work + 1, sizeof(khash));
-	*ed2k = khash;
-	end = strchr(*ed2k, '|');
-	if (end != NULL)
-		*end = 0;
-	string_to_lowercase(*ed2k);
-
-	/* 0436df97e7fe25b620edb25380717479| */
-	work = strchr(work + 1, '|');
-	if (work == NULL)
-		return 6;
-
-	return 0;
-}
-
-int
-mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data)
-{
-	int rc;
-	int state = 0;
-	char *buffer;
-	char *work;
-
-	bzero((char *)mylist, sizeof(*mylist));
-	rc = ed2klink_to_key(ed2k_link,&(mylist->ml_size),&(mylist->ml_md4));
-	if (rc != 0) {
-		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
-		return 1;
-	}
-	if ((mylist->ml_size == NULL) || (mylist->ml_md4 == NULL))
-		return 1;
-
-	buffer = strdup(data);
-	if (buffer == NULL)
-		errx(EX_CANTCREAT, "out of memory in mylist_decode: %-70.70s", ed2k_link);
-
-	mylist->ml_cached = buffer;
-	work = strchr(buffer, '|');
-	while (work != NULL) {
-		*(work++) = 0;
-		switch (state++) {
-		case 0:
-			mylist->ml_lid = work;
-			break;
-		case 1:
-			mylist->ml_fid = work;
-			break;
-		case 2:
-			mylist->ml_eid = work;
-			break;
-		case 3:
-			mylist->ml_aid = work;
-			break;
-		case 4:
-			mylist->ml_gid = work;
-			break;
-		case 5:
-			mylist->ml_date = work;
-			break;
-		case 6:
-			mylist->ml_state = work;
-			break;
-		case 7:
-			mylist->ml_viewdate = work;
-			break;
-		case 8:
-			mylist->ml_storage = work;
-			break;
-		case 9:
-			mylist->ml_source = work;
-			break;
-		case 10:
-			mylist->ml_other = work;
-			break;
-		default:
-			return 0;
-		}
-		if (*work == 0)
-			return 0;
-		work = strchr(work, '|');
-	}
-	return 0;
-}
-
-void
-print_date(const char *prefix, const char *seconds)
-{
-	long lsec;
-	time_t now;
-
-	if (seconds == NULL)
-		return;
-
-	lsec = atol(seconds);
-	if (lsec == 0)
-		return;
-
-	now = lsec;
-	strftime(kbuf, sizeof(kbuf) - 1, Date_format, localtime(&now));
-	printf("%s%s\n", prefix, kbuf);
-
-}
-
-void
-mylist_show(MYLIST_TYP *mylist)
-{
-	printf("size: %s\n", mylist->ml_size);
-	printf("ed2khash: %s\n", mylist->ml_md4);
-	printf("cached: %s\n", mylist->ml_cached);
-	print_date("cachedtext: ", mylist->ml_cached);
-	printf("lid: %s\n", mylist->ml_lid);
-	printf("fid: %s\n", mylist->ml_fid);
-	printf("eid: %s\n", mylist->ml_eid);
-	printf("aid: %s\n", mylist->ml_aid);
-	printf("gid: %s\n", mylist->ml_gid);
-	printf("date: %s\n", mylist->ml_date);
-	print_date("datetext: ", mylist->ml_date);
-	printf("state: %s\n", mylist->ml_state);
-	if (mylist->ml_state != NULL) {
-		int st = -1;
-		st = atoi(mylist->ml_state);
-		if ((st >= 0) && (st < MYLIST_MAX_STATE))
-			printf("statetext: %s\n", mylist_states[st]);
-	}
-	printf("viewdate: %s\n", mylist->ml_viewdate);
-	print_date("viewdatetext: ", mylist->ml_viewdate);
-	printf("storage: %s\n", mylist->ml_storage);
-	printf("source: %s\n", mylist->ml_source);
-	printf("other: %s\n", mylist->ml_other);
-	printf("\n");
-}
-
-int
-mylist_edit(MYLIST_TYP *mylist, const char *changes)
-{
-	char *buffer;
-	char *value;
-	char ch;
-
-	if (changes == NULL)
-		return EX_USAGE;
-
-	buffer = strdup(changes);
-	if (buffer == NULL)
-		errx(EX_CANTCREAT, "out of memory in mylist_edit: %-70.70s", changes);
-
-	value = strchr(buffer, '=');
-	if (value == NULL)
-		return EX_USAGE;
-
-	*(value++) = 0;
-
-	if (strlen(buffer) == 0)
-		return EX_USAGE;
-
-	ch = *buffer;
-	switch (ch) {
-	case 'o': /* edit other */
-		mylist->ml_other = value;
-		return 0;
-	case 's':
-		if (strcmp(buffer,"source") == 0) {
-			mylist->ml_source = value;
-			return 0;
-		};
-		if (strcmp(buffer,"storage") == 0) {
-			mylist->ml_storage = value;
-			return 0;
-		};
-		break;
-	}
-	return EX_USAGE;
-}
-
-int
-info_decode(INFO_TYP *info, const char *ed2k_link, const char *data)
-{
-	int rc;
-	int state = 0;
-	char *buffer;
-	char *work;
-
-	bzero((char *)info, sizeof(*info));
-	rc = ed2klink_to_key(ed2k_link,&(info->f_size),&(info->f_md4));
-	if (rc != 0) {
-		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
-		return 1;
-	}
-	if ((info->f_size == NULL) || (info->f_md4 == NULL))
-		return 1;
-
-	buffer = strdup(data);
-	if (buffer == NULL)
-		errx(EX_CANTCREAT, "out of memory in info: %-70.70s", ed2k_link);
-
-	info->f_cached = buffer;
-	work = strchr(buffer, '|');
-	while (work != NULL) {
-		*(work++) = 0;
-		switch (state++) {
-		case 0:
-			info->f_fid = work;
-			break;
-		case 1:
-			info->f_aid = work;
-			break;
-		case 2:
-			info->f_eid = work;
-			break;
-		case 3:
-			info->f_gid = work;
-			break;
-		case 4:
-			info->f_state = work;
-			break;
-		case 5:
-			info->f_bytes = work;
-			break;
-		case 6:
-			info->f_ed2khash = work;
-			break;
-		case 7:
-			info->f_name = work;
-			break;
-		default:
-			return 0;
-		}
-		if (*work == 0)
-			return 0;
-		work = strchr(work, '|');
-	}
-	return 0;
-}
-
-void
-info_show(INFO_TYP *info)
-{
-	INFO_STATE_CONVERT_TYP decoder;
-
-	printf("size: %s\n", info->f_size);
-	printf("ed2khash: %s\n", info->f_md4);
-	printf("cached: %s\n", info->f_cached);
-	print_date("cachedtext: ", info->f_cached);
-	printf("fid: %s\n", info->f_fid);
-	printf("aid: %s\n", info->f_aid);
-	printf("eid: %s\n", info->f_eid);
-	printf("gid: %s\n", info->f_gid);
-	printf("state: %s\n", info->f_state);
-	if (info->f_state != NULL) {
-		int st = -1;
-		int version = 1;
-		st = atoi(info->f_state);
-		decoder.numeric = st;
-		printf("crc: %s\n", info_crc[decoder.value.crc]);
-		switch (decoder.value.version) {
-		case 1:
-			version = 2;
-			break;
-		case 2:
-			version = 3;
-			break;
-		case 4:
-			version = 4;
-			break;
-		case 8:
-			version = 5;
-			break;
-		}
-		printf("version: %d\n", version);
-		if (decoder.value.censored == 1)
-			printf("censored: uncut\n" );
-		if (decoder.value.censored == 2)
-			printf("censored: censored\n" );
-	}
-	if (string_compare(info->f_size,info->f_bytes) != 0)
-		printf("anidb size: %s\n", info->f_bytes);
-	if (string_compare(info->f_md4,info->f_ed2khash) != 0)
-		printf("anidb ed2khash: %s\n", info->f_ed2khash);
-	printf("filename: %s\n", info->f_name);
 }
 
 
@@ -1369,6 +1040,339 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 }
 
 @end
+
+
+int
+ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k)
+{
+	char *work;
+	char *end;
+
+	*size = NULL;
+	*ed2k = NULL;
+
+/*
+
+in:
+ed2k://|file|[PM]Princess_Tutu_13[A0BC1BC8].avi|146810880|0436df97e7fe25b620edb25380717479|
+
+out:
+146810880
+0436df97e7fe25b620edb25380717479
+
+*/
+
+	/* ed2k: */
+	work = strchr(ed2k_link, ':');
+	if (work == NULL)
+		return 1;
+
+	/* //| */
+	work = strchr(work, '|');
+	if (work == NULL)
+		return 2;
+
+	/* file| */
+	work = strchr(work + 1, '|');
+	if (work == NULL)
+		return 3;
+
+	/* [PM]Princess_Tutu_13[A0BC1BC8].avi| */
+	work = strchr(work + 1, '|');
+	if (work == NULL)
+		return 4;
+
+	strlcpy(ksize, work + 1, sizeof(ksize));
+	*size = ksize;
+	end = strchr(*size, '|');
+	if (end != NULL)
+		*end = 0;
+
+	/* 146810880| */
+	work = strchr(work + 1, '|');
+	if (work == NULL)
+		return 5;
+
+	strlcpy(khash, work + 1, sizeof(khash));
+	*ed2k = khash;
+	end = strchr(*ed2k, '|');
+	if (end != NULL)
+		*end = 0;
+	string_to_lowercase(*ed2k);
+
+	/* 0436df97e7fe25b620edb25380717479| */
+	work = strchr(work + 1, '|');
+	if (work == NULL)
+		return 6;
+
+	return 0;
+}
+
+int
+mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data)
+{
+	int rc;
+	int state = 0;
+	char *buffer;
+	char *work;
+
+	bzero((char *)mylist, sizeof(*mylist));
+	rc = ed2klink_to_key(ed2k_link,&(mylist->ml_size),&(mylist->ml_md4));
+	if (rc != 0) {
+		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
+		return 1;
+	}
+	if ((mylist->ml_size == NULL) || (mylist->ml_md4 == NULL))
+		return 1;
+
+	buffer = strdup(data);
+	if (buffer == NULL)
+		errx(EX_CANTCREAT, "out of memory in mylist_decode: %-70.70s", ed2k_link);
+
+	mylist->ml_cached = buffer;
+	work = strchr(buffer, '|');
+	while (work != NULL) {
+		*(work++) = 0;
+		switch (state++) {
+		case 0:
+			mylist->ml_lid = work;
+			break;
+		case 1:
+			mylist->ml_fid = work;
+			break;
+		case 2:
+			mylist->ml_eid = work;
+			break;
+		case 3:
+			mylist->ml_aid = work;
+			break;
+		case 4:
+			mylist->ml_gid = work;
+			break;
+		case 5:
+			mylist->ml_date = work;
+			break;
+		case 6:
+			mylist->ml_state = work;
+			break;
+		case 7:
+			mylist->ml_viewdate = work;
+			break;
+		case 8:
+			mylist->ml_storage = work;
+			break;
+		case 9:
+			mylist->ml_source = work;
+			break;
+		case 10:
+			mylist->ml_other = work;
+			break;
+		default:
+			return 0;
+		}
+		if (*work == 0)
+			return 0;
+		work = strchr(work, '|');
+	}
+	return 0;
+}
+
+void
+print_date(const char *prefix, const char *seconds)
+{
+	long lsec;
+	time_t now;
+
+	if (seconds == NULL)
+		return;
+
+	lsec = atol(seconds);
+	if (lsec == 0)
+		return;
+
+	now = lsec;
+	strftime(kbuf, sizeof(kbuf) - 1, Date_format, localtime(&now));
+	printf("%s%s\n", prefix, kbuf);
+
+}
+
+void
+mylist_show(MYLIST_TYP *mylist)
+{
+	printf("size: %s\n", mylist->ml_size);
+	printf("ed2khash: %s\n", mylist->ml_md4);
+	printf("cached: %s\n", mylist->ml_cached);
+	print_date("cachedtext: ", mylist->ml_cached);
+	printf("lid: %s\n", mylist->ml_lid);
+	printf("fid: %s\n", mylist->ml_fid);
+	printf("eid: %s\n", mylist->ml_eid);
+	printf("aid: %s\n", mylist->ml_aid);
+	printf("gid: %s\n", mylist->ml_gid);
+	printf("date: %s\n", mylist->ml_date);
+	print_date("datetext: ", mylist->ml_date);
+	printf("state: %s\n", mylist->ml_state);
+	if (mylist->ml_state != NULL) {
+		int st = -1;
+		st = atoi(mylist->ml_state);
+		if ((st >= 0) && (st < MYLIST_MAX_STATE))
+			printf("statetext: %s\n", mylist_states[st]);
+	}
+	printf("viewdate: %s\n", mylist->ml_viewdate);
+	print_date("viewdatetext: ", mylist->ml_viewdate);
+	printf("storage: %s\n", mylist->ml_storage);
+	printf("source: %s\n", mylist->ml_source);
+	printf("other: %s\n", mylist->ml_other);
+	printf("\n");
+}
+
+int
+mylist_edit(MYLIST_TYP *mylist, const char *changes)
+{
+	char *buffer;
+	char *value;
+	char ch;
+
+	if (changes == NULL)
+		return EX_USAGE;
+
+	buffer = strdup(changes);
+	if (buffer == NULL)
+		errx(EX_CANTCREAT, "out of memory in mylist_edit: %-70.70s", changes);
+
+	value = strchr(buffer, '=');
+	if (value == NULL)
+		return EX_USAGE;
+
+	*(value++) = 0;
+
+	if (strlen(buffer) == 0)
+		return EX_USAGE;
+
+	ch = *buffer;
+	switch (ch) {
+	case 'o': /* edit other */
+		mylist->ml_other = value;
+		return 0;
+	case 's':
+		if (strcmp(buffer,"source") == 0) {
+			mylist->ml_source = value;
+			return 0;
+		};
+		if (strcmp(buffer,"storage") == 0) {
+			mylist->ml_storage = value;
+			return 0;
+		};
+		break;
+	}
+	return EX_USAGE;
+}
+
+int
+info_decode(INFO_TYP *info, const char *ed2k_link, const char *data)
+{
+	int rc;
+	int state = 0;
+	char *buffer;
+	char *work;
+
+	bzero((char *)info, sizeof(*info));
+	rc = ed2klink_to_key(ed2k_link,&(info->f_size),&(info->f_md4));
+	if (rc != 0) {
+		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
+		return 1;
+	}
+	if ((info->f_size == NULL) || (info->f_md4 == NULL))
+		return 1;
+
+	buffer = strdup(data);
+	if (buffer == NULL)
+		errx(EX_CANTCREAT, "out of memory in info: %-70.70s", ed2k_link);
+
+	info->f_cached = buffer;
+	work = strchr(buffer, '|');
+	while (work != NULL) {
+		*(work++) = 0;
+		switch (state++) {
+		case 0:
+			info->f_fid = work;
+			break;
+		case 1:
+			info->f_aid = work;
+			break;
+		case 2:
+			info->f_eid = work;
+			break;
+		case 3:
+			info->f_gid = work;
+			break;
+		case 4:
+			info->f_state = work;
+			break;
+		case 5:
+			info->f_bytes = work;
+			break;
+		case 6:
+			info->f_ed2khash = work;
+			break;
+		case 7:
+			info->f_name = work;
+			break;
+		default:
+			return 0;
+		}
+		if (*work == 0)
+			return 0;
+		work = strchr(work, '|');
+	}
+	return 0;
+}
+
+void
+info_show(INFO_TYP *info)
+{
+	INFO_STATE_CONVERT_TYP decoder;
+
+	printf("size: %s\n", info->f_size);
+	printf("ed2khash: %s\n", info->f_md4);
+	printf("cached: %s\n", info->f_cached);
+	print_date("cachedtext: ", info->f_cached);
+	printf("fid: %s\n", info->f_fid);
+	printf("aid: %s\n", info->f_aid);
+	printf("eid: %s\n", info->f_eid);
+	printf("gid: %s\n", info->f_gid);
+	printf("state: %s\n", info->f_state);
+	if (info->f_state != NULL) {
+		int st = -1;
+		int version = 1;
+		st = atoi(info->f_state);
+		decoder.numeric = st;
+		printf("crc: %s\n", info_crc[decoder.value.crc]);
+		switch (decoder.value.version) {
+		case 1:
+			version = 2;
+			break;
+		case 2:
+			version = 3;
+			break;
+		case 4:
+			version = 4;
+			break;
+		case 8:
+			version = 5;
+			break;
+		}
+		printf("version: %d\n", version);
+		if (decoder.value.censored == 1)
+			printf("censored: uncut\n" );
+		if (decoder.value.censored == 2)
+			printf("censored: censored\n" );
+	}
+	if (string_compare(info->f_size,info->f_bytes) != 0)
+		printf("anidb size: %s\n", info->f_bytes);
+	if (string_compare(info->f_md4,info->f_ed2khash) != 0)
+		printf("anidb ed2khash: %s\n", info->f_ed2khash);
+	printf("filename: %s\n", info->f_name);
+}
 
 
 @implementation anidb_c : Object
