@@ -1,6 +1,6 @@
 
 
-the state field provides information about the location and sharing state of a file in mylist.
+the mylist state field provides information about the location and sharing state of a file in mylist.
 state:
   o 0 - unknown - state is unknown or the user doesnt want to provide this information
   o 1 - on hdd - the file is stored on hdd (but is not shared)
@@ -8,6 +8,19 @@ state:
   o 3 - deleted - the file has been deleted or is not available for other reasons (i.e. reencoded)
   o 4 - shared - the file is stored on hdd and shared
   o 5 - release - the file is stored on hdd and shared on release priority
+
+
+fid, aid, eid, gid are the unique ids for the file, anime, ep, group entries at anidb.
+You can use those to create links to the corresponding pages at anidb.
+ 
+file state:
+ bit / int value         meaning
+  1 / 1   FILE_CRCOK: file matched official crc (displayed with green background in anidb)
+  2 / 2   FILE_CRCERR: file DID NOT match official crc (displayed with red background in anidb)
+  3 / 4   FILE_ISV2: file is version 2
+  4 / 8   FILE_ISV3: file is version 3
+  5 / 16  FILE_ISV4: file is version 4
+  6 / 32  FILE_ISV5: file is version 5
 
 -----------------------------------------------------------------------------
 
