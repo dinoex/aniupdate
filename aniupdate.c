@@ -150,7 +150,8 @@ void config_parse_line(CONFIG_TYP *config, const char *parameter);
 void config_read(void);
 void config_check(void);
 
-void localdb_cleanup(const char *name, time_t vaild_from);
+void localdb_cleanup(const char *name, time_t valid_from);
+void localdb_delete(const char *name, const char *hash);
 void localdb_write(const char *name, const char *hash, const char *value);
 void localdb_write_ed2k(const char *name, const char *size, const char *md4, const char *value);
 char *localdb_read(const char *name, const char *hash);
@@ -182,6 +183,7 @@ static const char *Add_other = NULL;
 static const char *Config_file = NULL;
 static const char *Date_format = NULL;
 static const char *Server_name = NULL;
+static const char *Session_db = NULL;
 static const char *Files_db = NULL;
 static const char *Mylist_db = NULL;
 static const char *User = NULL;
@@ -237,6 +239,7 @@ CONFIG_TYP      Config_box[] = {
 { 1, { &Remote_port          }, "Remote_port",        "9000" },
 { 1, { &Retrys               }, "Retrys",             "2" },
 { 0, { &Server_name          }, "Server_name",        "anidb.ath.cx" },
+{ 0, { &Session_db           }, "Session_db",         ".session.db" },
 { 0, { &User                 }, "User",               NULL },
 { 1, { &Verbose              }, "Verbose",            NULL },
 { -1, { NULL }, NULL, NULL }
@@ -916,14 +919,14 @@ config_check(void)
 
 
 void
-localdb_cleanup(const char *name, time_t vaild_from)
+localdb_cleanup(const char *name, time_t valid_from)
 {
 	DB *db;
 	DBT key, data;
 	int ret, fd, st;
 	time_t tv;
 
-	db = dbopen(name, O_RDWR, 0644, DB_HASH, NULL);
+	db = dbopen(name, O_RDWR, 0600, DB_HASH, NULL);
 	if (db == NULL)
 		err(EX_NOINPUT, "open database %s failed", name);
 
@@ -944,7 +947,7 @@ localdb_cleanup(const char *name, time_t vaild_from)
 			strncpy(fbuf, data.data, data.size);
 			fbuf[data.size] = 0;
 			tv = atol(fbuf);
-			if (tv < vaild_from) {
+			if (tv < valid_from) {
 				db->del(db, &key, 0);
 				db->sync(db, 0);
 				/* start over */
@@ -953,6 +956,48 @@ localdb_cleanup(const char *name, time_t vaild_from)
 			}
 			ret = db->seq(db, &key, &data, R_NEXT);
 		}
+		st = flock(fd, LOCK_UN);
+	} else {
+		warnx("lock database %s failed", name);
+	}
+	db->close(db);
+}
+
+void
+localdb_delete(const char *name, const char *hash)
+{
+	DB *db;
+	DBT key;
+	char *hash2;
+	int fd;
+	int st;
+	int rc;
+
+	db = dbopen(name, O_RDWR|O_CREAT, 0600, DB_HASH, NULL);
+	if (db == NULL)
+		err(EX_NOINPUT, "open database %s failed", name);
+
+	/* lock all changes */
+	fd = db->fd(db);
+	if (fd == -1) {
+		st = -1;
+		warn("database has no fd");
+	} else {
+		st = flock(fd, LOCK_EX);
+	}
+
+	if (st == 0) {
+		/* generate entry */
+		hash2 = strdup(hash);
+		if (hash2 == NULL)
+			errx(EX_CANTCREAT, "out of mem for database");
+		key.data = strdup(hash);
+		key.size = strlen(key.data);
+		rc = db->del(db, &key, 0);
+		if ((rc != 0) && (rc != 1))
+			warn("database delete returns %d", rc);
+		db->sync(db,0);
+		free(hash2);
 		st = flock(fd, LOCK_UN);
 	} else {
 		warnx("lock database %s failed", name);
@@ -970,7 +1015,7 @@ localdb_write(const char *name, const char *hash, const char *value)
 	int st;
 	int rc;
 
-	db = dbopen(name, O_RDWR|O_CREAT, 0644, DB_HASH, NULL);
+	db = dbopen(name, O_RDWR|O_CREAT, 0600, DB_HASH, NULL);
 	if (db == NULL)
 		err(EX_NOINPUT, "open database %s failed", name);
 
@@ -1023,7 +1068,7 @@ localdb_read(const char *name, const char *hash)
 	char *str = NULL;
 	int rc;
 
-	db = dbopen(name, O_RDONLY, 0644, DB_HASH, NULL);
+	db = dbopen(name, O_RDONLY, 0600, DB_HASH, NULL);
 	if (db == NULL) {
 		if (errno == ENOENT)
 			return NULL;
@@ -1241,6 +1286,7 @@ anidb_logout(void)
 	size_t len;
 
 	if (session != NULL) {
+		localdb_delete(Session_db, "session");
 		len = snprintf(sbuf, MAX_BUF - 1, "LOGOUT s=%s&tag=%s\n",
 			session, Tag);
 		session = NULL;
@@ -1284,9 +1330,26 @@ anidb_login(void)
 {
 	size_t len;
 	char *work;
+	char *data;
+	time_t tv;
+	time_t valid_from;
 
 	Tag = User;
 	Taglen = strlen(Tag) + 1;
+	data = localdb_read(Session_db, "session");
+	if (data != NULL) {
+		work = strchr(data, '|');
+		if (work != NULL) {
+			valid_from = time(NULL);
+			valid_from -= (24 * 60 * 60);
+			tv = atol(data);
+                        if (tv > valid_from) {
+				session = strdup(++work);
+				return;
+                        }
+		}
+	}
+
 	len = snprintf(sbuf, MAX_BUF - 1,
 		"AUTH user=%s&pass=%s&protover=2&client=aniupdate&clientver=1&tag=%s\n",
 		User, Password, Tag);
@@ -1314,6 +1377,8 @@ anidb_login(void)
 	work = strchr(session, ' ');
 	if (work != NULL)
 		*work = 0;
+
+	localdb_write(Session_db, "session", session);
 }
 
 void
