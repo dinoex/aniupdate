@@ -206,6 +206,7 @@ static int Keep_session;
 static int Local_port;
 static int Remote_port;
 static int Retrys;
+static int Timeout;
 
 static int connected = NO;
 static int s = -1;
@@ -258,6 +259,7 @@ CONFIG_TYP      Config_box[] = {
 { 1, { &Retrys               }, "Retrys",             "2" },
 { 0, { &Server_name          }, "Server_name",        "anidb.ath.cx" },
 { 0, { &Session_db           }, "Session_db",         ".session.db" },
+{ 1, { &Timeout              }, "Timeout",            "30" },
 { 0, { &User                 }, "User",               NULL },
 { 1, { &Verbose              }, "Verbose",            NULL },
 { -1, { NULL }, NULL, NULL }
@@ -834,7 +836,7 @@ network_open(void)
 {
 	struct hostent *hp;
 	struct in_addr iaddr;
-	struct timeval resp_timeout = { 15, 0 };
+	struct timeval resp_timeout = { 30, 0 };
 	time_t saved;
 	char *data;
 	char *work;
@@ -842,6 +844,7 @@ network_open(void)
 	int rc;
 
 	bzero((char *)&sock_in, sizeof(sock_in));
+	resp_timeout.tv_sec = Timeout;
 
 	iaddr.s_addr = inet_addr(Server_name);
 	if (iaddr.s_addr != INADDR_NONE) {
@@ -1579,6 +1582,8 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 
 	if (session == NULL)
 		anidb_login();
+	if (session == NULL)
+		return;
 
 	rc = filename_to_key(ed2k_link,&size,&md4);
 	if (rc != 0)
@@ -1603,7 +1608,7 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 	switch (server_status) {
 	case 501:
 	case 506:
-		anidb_login();
+		anidb_nosession();
 		anidb_add(ed2k_link,edit);
 		return;
 	case 310:
@@ -1646,6 +1651,8 @@ anidb_mylist(const char *ed2k_link, int force)
 
 	if (session == NULL)
 		anidb_login();
+	if (session == NULL)
+		return NULL;
 
 	len = snprintf(sbuf, MAX_BUF - 1, "MYLIST s=%s&size=%s&ed2k=%s&tag=%s\n",
 		session, size, md4, tag) + 1;
@@ -1656,7 +1663,7 @@ anidb_mylist(const char *ed2k_link, int force)
 	switch (server_status) {
 	case 501:
 	case 506:
-		anidb_login();
+		anidb_nosession();
 		return anidb_mylist(ed2k_link,force);
 	case 321:
 		warnx("Server returns: %-70.70s", rbuf);
@@ -1709,6 +1716,8 @@ anidb_files(const char *ed2k_link, int force)
 
 	if (session == NULL)
 		anidb_login();
+	if (session == NULL)
+		return NULL;
 
 	len = snprintf(sbuf, MAX_BUF - 1, "FILE s=%s&size=%s&ed2k=%s&tag=%s\n",
 		session, size, md4, tag) + 1;
@@ -1719,7 +1728,7 @@ anidb_files(const char *ed2k_link, int force)
 	switch (server_status) {
 	case 501:
 	case 506:
-		anidb_login();
+		anidb_nosession();
 		return anidb_files(ed2k_link, force);
 	case 320:
 		warnx("Server returns: %-70.70s", rbuf);

@@ -254,6 +254,7 @@ static int Keep_session;
 static int Local_port;
 static int Remote_port;
 static int Retrys;
+static int Timeout;
 
 static char fbuf[MAX_BUF];
 static char kbuf[MAX_KEY];
@@ -287,6 +288,7 @@ CONFIG_TYP      Config_box[] = {
 { 1, { &Retrys               }, "Retrys",             "2" },
 { 0, { &Server_name          }, "Server_name",        "anidb.ath.cx" },
 { 0, { &Session_db           }, "Session_db",         ".session.db" },
+{ 1, { &Timeout              }, "Timeout",            "30" },
 { 0, { &User                 }, "User",               NULL },
 { 1, { &Verbose              }, "Verbose",            NULL },
 { -1, { NULL }, NULL, NULL }
@@ -876,7 +878,7 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 {
 	struct hostent *hp;
 	struct in_addr iaddr;
-	struct timeval resp_timeout = { 15, 0 };
+	struct timeval resp_timeout = { 30, 0 };
 	time_t saved;
 	char *data;
 	char *work;
@@ -884,6 +886,7 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	int rc;
 
 	bzero((char *)&sock_in, sizeof(sock_in));
+	resp_timeout.tv_sec = Timeout;
 
 	iaddr.s_addr = inet_addr(Server_name);
 	if (iaddr.s_addr != INADDR_NONE) {
@@ -1621,6 +1624,8 @@ info_show(INFO_TYP *info)
 
 	if (session == NULL)
 		[self login];
+	if (session == NULL)
+		return;
 
 	rc = filename_to_key(ed2k_link,&size,&md4);
 	if (rc != 0)
@@ -1645,7 +1650,7 @@ info_show(INFO_TYP *info)
 	switch (server_status) {
 	case 501:
 	case 506:
-		[self login];
+		[self nosession];
 		[self add: ed2k_link: edit];
 		return;
 	case 310:
@@ -1687,6 +1692,8 @@ info_show(INFO_TYP *info)
 
 	if (session == NULL)
 		[self login];
+	if (session == NULL)
+		return NULL;
 
 	len = snprintf(sbuf, MAX_BUF - 1, "MYLIST s=%s&size=%s&ed2k=%s&tag=%s\n",
 		session, size, md4, tag) + 1;
@@ -1697,7 +1704,7 @@ info_show(INFO_TYP *info)
 	switch (server_status) {
 	case 501:
 	case 506:
-		[self login];
+		[self nosession];
 		return [self mylist: ed2k_link: force];
 	case 321:
 		warnx("Server returns: %-70.70s", rbuf);
@@ -1749,6 +1756,8 @@ info_show(INFO_TYP *info)
 
 	if (session == NULL)
 		[self login];
+	if (session == NULL)
+		return NULL;
 
 	len = snprintf(sbuf, MAX_BUF - 1, "FILE s=%s&size=%s&ed2k=%s&tag=%s\n",
 		session, size, md4, tag) + 1;
@@ -1759,7 +1768,7 @@ info_show(INFO_TYP *info)
 	switch (server_status) {
 	case 501:
 	case 506:
-		[self login];
+		[self nosession];
 		return [self files: ed2k_link: force];
 	case 320:
 		warnx("Server returns: %-70.70s", rbuf);
