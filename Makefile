@@ -45,5 +45,14 @@ CFLAGS+=	-Wunused
 CFLAGS+=	-Wwrite-strings
 #CFLAGS+=	-pedantic
 
-all:	aniupdate
+DBS=	mylist files
 
+all:	aniupdate ${DBS}
+
+.for i in ${DBS}
+${i}:	${i}.db
+	makemap -u hash ${i}.db >${.TARGET}
+
+.endfor
+
+# eof
