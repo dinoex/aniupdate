@@ -1,0 +1,39 @@
+
+
+the state field provides information about the location and sharing state of a file in mylist.
+state:
+  o 0 - unknown - state is unknown or the user doesnt want to provide this information
+  o 1 - on hdd - the file is stored on hdd (but is not shared)
+  o 2 - on cd - the file is stored on cd
+  o 3 - deleted - the file has been deleted or is not available for other reasons (i.e. reencoded)
+  o 4 - shared - the file is stored on hdd and shared
+  o 5 - release - the file is stored on hdd and shared on release priority
+
+-----------------------------------------------------------------------------
+
+Databases layouts:
+
+mylist.db:
+
+Key:
+<size>|<ed2khash>
+
+Val:
+<local time>|<lid>|<fid>|<eid>|<aid>|<gid>|<date>|<state>|<viewdate>|<storage>|<source>|<other>
+
+$ makemap -u hash mylist.db     
+245432320|283212f32f413383e8b19c994c9ec45b      1102915998|4080652|85717|21385|1544|1249|1102799587|1|1102845252|||
+
+files.db:
+
+Key:
+<size>|<ed2khash>
+
+Val:
+<local time>|<fid>|<aid>|<eid>|<gid>|<state>|<size>|<ed2khash>|<anidbfilename>
+
+$ makemap -u hash files.db     
+245432320|283212f32f413383e8b19c994c9ec45b	1102917183|85717|1544|21385|1249|5|245432320|283212f32f413383e8b19c994c9ec45b|Elfen Lied - 01 - Chance Meeting - Begegnung - [SL].avi
+
+-----------------------------------------------------------------------------
+
