@@ -46,7 +46,7 @@ CFLAGS+=	-Wunused
 CFLAGS+=	-Wwrite-strings
 #CFLAGS+=	-pedantic
 
-DBS=	mylist files
+DBS=	./mylist ./files
 
 all:	aniupdate ${DBS} names.db
 
@@ -63,7 +63,14 @@ names.db:	names
 	makemap -f hash ${.TARGET} < names
 
 PROG=	aniupdate
+.if exists(aniupdate.c)
 SRCS=	aniupdate.m
+.else
+SRCS=	aniupdate.m
+.if !exists(/usr/lib/libcipher.so)
+OBJCLIBS?=	-lobjc -lc_r
+.endif
+.endif
 
 NOMAN=YES
 
