@@ -159,6 +159,7 @@ void network_send(const char *buf, size_t len);
 int network_recv(size_t len);
 
 int ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k);
+int filename_to_key(const char *filename, char **size, char **ed2k);
 int mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data);
 void print_date(const char *prefix, const char *seconds);
 void mylist_show(MYLIST_TYP *mylist);
@@ -223,6 +224,7 @@ static char fbuf[MAX_BUF];
 static char kbuf[MAX_KEY];
 static char ksize[MAX_KEY];
 static char khash[MAX_KEY];
+static char kname[MAX_KEY];
 
 static const char *tag = NULL;
 static char *session = NULL;
@@ -1023,7 +1025,7 @@ out:
 */
 
 	/* ed2k: */
-	work = strchr(ed2k_link, ':');
+	work = strcasestr(ed2k_link, "ed2k:");
 	if (work == NULL)
 		return 1;
 
@@ -1069,6 +1071,45 @@ out:
 }
 
 int
+filename_to_key(const char *filename, char **size, char **ed2k)
+{
+	int rc;
+	const char *base;
+	char *data;
+
+	if (strncmp(filename, kname, sizeof(kname)) == 0) {
+		*size = ksize;
+		*ed2k = khash;
+		return 0;
+	}
+	strncpy(kname, filename, sizeof(kname) - 1);
+	kname[sizeof(kname) - 1] = 0;
+
+	rc = ed2klink_to_key(filename,size,ed2k);
+	if (rc == 0) {
+		if ((*size != NULL) && (*ed2k != NULL))
+			return 0;
+	}
+
+	base = strrchr(filename, '/' );
+	if (base != NULL)
+		base ++;
+	else
+		base = filename;
+
+	data = localdb_read(Names_db, base);
+	if (data != NULL) {
+		rc = ed2klink_to_key(data,size,ed2k);
+		if (rc == 0) {
+			if ((*size != NULL) && (*ed2k != NULL))
+				return 0;
+		}
+	}
+	warnx("File not an ed2k link, error=%d in: %-70.70s", rc, filename);
+	return 1;
+}
+
+int
 mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data)
 {
 	int rc;
@@ -1077,12 +1118,8 @@ mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data)
 	char *work;
 
 	bzero((char *)mylist, sizeof(*mylist));
-	rc = ed2klink_to_key(ed2k_link,&(mylist->ml_size),&(mylist->ml_md4));
-	if (rc != 0) {
-		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
-		return 1;
-	}
-	if ((mylist->ml_size == NULL) || (mylist->ml_md4 == NULL))
+	rc = filename_to_key(ed2k_link,&(mylist->ml_size),&(mylist->ml_md4));
+	if (rc != 0)
 		return 1;
 
 	buffer = strdup(data);
@@ -1236,12 +1273,8 @@ info_decode(INFO_TYP *info, const char *ed2k_link, const char *data)
 	char *work;
 
 	bzero((char *)info, sizeof(*info));
-	rc = ed2klink_to_key(ed2k_link,&(info->f_size),&(info->f_md4));
-	if (rc != 0) {
-		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
-		return 1;
-	}
-	if ((info->f_size == NULL) || (info->f_md4 == NULL))
+	rc = filename_to_key(ed2k_link,&(info->f_size),&(info->f_md4));
+	if (rc != 0)
 		return 1;
 
 	buffer = strdup(data);
@@ -1541,12 +1574,8 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 	if (session == NULL)
 		anidb_login();
 
-	rc = ed2klink_to_key(ed2k_link,&size,&md4);
-	if (rc != 0) {
-		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
-		return;
-	}
-	if ((size == NULL) || (md4 == NULL))
+	rc = filename_to_key(ed2k_link,&size,&md4);
+	if (rc != 0)
 		return;
 
 	if (edit != NULL) {
@@ -1599,12 +1628,8 @@ anidb_mylist(const char *ed2k_link, int force)
 	if (Verbose != NO)
 		printf("add: %-70.70s\n", ed2k_link);
 
-	rc = ed2klink_to_key(ed2k_link,&size,&md4);
-	if (rc != 0) {
-		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
-		return NULL;
-	}
-	if ((size == NULL) || (md4 == NULL))
+	rc = filename_to_key(ed2k_link,&size,&md4);
+	if (rc != 0)
 		return NULL;
 
 	if ((Cache_ignore == NO) && (force == NO)) {
@@ -1666,12 +1691,8 @@ anidb_files(const char *ed2k_link, int force)
 	if (Verbose != NO)
 		printf("add: %-70.70s\n", ed2k_link);
 
-	rc = ed2klink_to_key(ed2k_link,&size,&md4);
-	if (rc != 0) {
-		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, ed2k_link);
-		return NULL;
-	}
-	if ((size == NULL) || (md4 == NULL))
+	rc = filename_to_key(ed2k_link,&size,&md4);
+	if (rc != 0)
 		return NULL;
 
 	if ((Cache_ignore == NO) && (force == NO)) {
