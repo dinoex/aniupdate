@@ -46,21 +46,11 @@ CFLAGS+=	-Wunused
 CFLAGS+=	-Wwrite-strings
 #CFLAGS+=	-pedantic
 
-DBS=	./mylist ./files
+.if exists(Makefile.local)
+.include "Makefile.local"
+.endif
 
-all:	aniupdate ${DBS} names.db
-
-.for i in ${DBS}
-${i}:	${i}.db
-	makemap -u hash ${i}.db >${.TARGET}
-
-.endfor
-
-names:	/data/anime/db/alle2dk names.awk
-	awk -f names.awk /data/anime/db/alle2dk >${.TARGET}
-
-names.db:	names
-	makemap -f hash ${.TARGET} < names
+all:	aniupdate
 
 PROG=	aniupdate
 .if exists(aniupdate.c)
