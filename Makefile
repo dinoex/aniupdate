@@ -54,7 +54,7 @@ all:	aniupdate
 
 PROG=	aniupdate
 .if exists(aniupdate.c)
-SRCS=	aniupdate.m
+SRCS=	aniupdate.c
 .else
 SRCS=	aniupdate.m
 .if !exists(/usr/lib/libcipher.so)
