@@ -46,6 +46,10 @@ CFLAGS+=	-Wunused
 CFLAGS+=	-Wwrite-strings
 #CFLAGS+=	-pedantic
 
+CFLAGS+=	-D_GNU_SOURCE
+
+LDFLAGS+=	-ldb
+
 all:	aniupdate
 
 # eof

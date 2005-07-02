@@ -42,6 +42,7 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <sys/time.h>
+#include <sys/file.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -57,7 +58,11 @@
 #include <errno.h>
 
 #include <fcntl.h>
+#ifdef linux
+#include <db_185.h>
+#else
 #include <db.h>
+#endif
 
 #undef WITH_UDP
 #define WITH_UDP
@@ -79,6 +84,10 @@
 #define CT_LONG			2
 #define CT_SIZE			3
 #define CT_LOWER_STRING		4
+
+#ifdef linux
+#define	strlcpy(x,y,z)		{ strncpy(x,y,z);x[(z)-1]=0; }
+#endif
 
 typedef union {
 	const void	*vvar;
@@ -182,7 +191,6 @@ void usage(void);
 void command_config(int argc, const char *const *argv);
 void command_options(int argc, const char *const *argv);
 void command_run(int argc, const char *const *argv);
-int main(int argc, const char *const *argv);
 
 static const char *Add_source = NULL;
 static const char *Add_storage = NULL;
@@ -862,9 +870,11 @@ network_open(void)
 			errx(1, "gethostbyname: illegal address");
 	};
 	sock_in.sin_family = hp->h_addrtype;
+#ifndef linux
 	sock_in.sin_len = sizeof(sock_in);
+#endif
 	memcpy(&sock_in.sin_addr, hp->h_addr_list[0],
-		sock_in.sin_len);
+		hp->h_length);
 	sock_in.sin_port = htons(Remote_port);
 
 #ifdef WITH_UDP
@@ -890,7 +900,9 @@ network_open(void)
 #endif
 
 	bzero((char *)&local_in, sizeof(local_in));
+#ifndef linux
 	local_in.sin_len = sizeof(local_in);
+#endif
 	local_in.sin_family = sock_in.sin_family;
 	local_in.sin_port = htons(Local_port);
 	rc = bind(s, (struct sockaddr *)(&local_in), sizeof(local_in));
