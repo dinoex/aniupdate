@@ -7,3 +7,11 @@ files
 mylist
 HISTORY
 .session.db
+?.html
+Makefile.local
+db
+deleted-fid.txt
+names
+names.awk
+tmp.*
+udp-api.html
