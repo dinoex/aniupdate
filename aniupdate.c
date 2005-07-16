@@ -156,6 +156,7 @@ void config_check(void);
 void localdb_cleanup(const char *name, time_t valid_from);
 void localdb_delete(const char *name, const char *hash);
 void localdb_write(const char *name, const char *hash, const char *value);
+void localdb_write_raw(const char *name, const char *hash, const char *value);
 void localdb_write_ed2k(const char *name, const char *size, const char *md4, const char *value);
 char *localdb_read(const char *name, const char *hash);
 char *localdb_read_ed2k(const char *name, const char *size, const char *md4);
@@ -169,6 +170,7 @@ int network_recv(size_t len);
 
 int ed2klink_to_key(const char *ed2k_link, char **size, char **ed2k);
 int filename_to_key(const char *filename, char **size, char **ed2k);
+int generate_hash(const char *filename, char **size, char **ed2k);
 int mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data);
 void print_date(const char *prefix, const char *seconds);
 void mylist_show(MYLIST_TYP *mylist);
@@ -200,6 +202,7 @@ static const char *Date_format = NULL;
 static const char *Server_name = NULL;
 static const char *Session_db = NULL;
 static const char *Files_db = NULL;
+static const char *Hash_program = NULL;
 static const char *Mylist_db = NULL;
 static const char *Names_db = NULL;
 static const char *User = NULL;
@@ -230,6 +233,7 @@ static int server_status = 0;
 static char rbuf[MAX_BUF];
 static char sbuf[MAX_BUF];
 static char fbuf[MAX_BUF];
+static char ebuf[MAX_BUF];
 static char kbuf[MAX_KEY];
 static char ksize[MAX_KEY];
 static char khash[MAX_KEY];
@@ -257,6 +261,7 @@ CONFIG_TYP      Config_box[] = {
 { 0, { &Date_format          }, "Date_format",        "%Y-%m-%d %H:%M:%S" },
 { 1, { &Debug                }, "Debug",              NULL },
 { 0, { &Files_db             }, "Files_db",           "files.db" },
+{ 0, { &Hash_program         }, "Hash_program",       "edonkey-hash" },
 { 1, { &Keep_session         }, "Keep_session",       NULL },
 { 1, { &Local_port           }, "Local_port",         "9000" },
 { 0, { &Mylist_db            }, "Mylist_db",          "mylist.db" },
@@ -746,6 +751,52 @@ localdb_write(const char *name, const char *hash, const char *value)
 }
 
 void
+localdb_write_raw(const char *name, const char *hash, const char *value)
+{
+	DB *db;
+	DBT key, data;
+	char *hash2;
+	int fd;
+	int st;
+	int rc;
+
+	db = dbopen(name, O_RDWR|O_CREAT, 0600, DB_HASH, NULL);
+	if (db == NULL)
+		err(EX_NOINPUT, "open database %s failed", name);
+
+	/* lock all changes */
+	fd = db->fd(db);
+	if (fd == -1) {
+		st = -1;
+		warn("database has no fd");
+	} else {
+		st = flock(fd, LOCK_EX);
+	}
+
+	if (st == 0) {
+		/* generate entry */
+		hash2 = strdup(hash);
+		if (hash2 == NULL)
+			errx(EX_CANTCREAT, "out of mem for database");
+		key.data = hash2;
+		key.size = strlen(key.data);
+		if (value != NULL)
+			snprintf(fbuf, MAX_BUF, "%s", value);
+		data.data = fbuf;
+		data.size = strlen(fbuf);
+		rc = db->put(db, &key, &data, 0);
+		if ((rc != 0) && (rc != 1))
+			warn("database write returns %d", rc);
+		db->sync(db,0);
+		free(hash2);
+		st = flock(fd, LOCK_UN);
+	} else {
+		warnx("lock database %s failed", name);
+	}
+	db->close(db);
+}
+
+void
 localdb_write_ed2k(const char *name, const char *size, const char *md4, const char *value)
 {
 	size_t len;
@@ -1092,6 +1143,32 @@ out:
 }
 
 int
+generate_hash(const char *filename, char **size, char **ed2k)
+{
+	int rc;
+	FILE *fp;
+	char *data;
+
+	snprintf(ebuf, sizeof(ebuf) - 1, "%s '%s'",
+		Hash_program, filename);
+	fflush(stdout);
+	fp = popen(ebuf, "r");
+	if (fp == NULL)
+		err(EX_IOERR, "cannot execute hash from program: %-70.70s", ebuf);
+	data = fgets(fbuf, sizeof(fbuf) -1, fp);
+        if (data == NULL)
+		err(EX_IOERR, "cannot get hash from program: %-70.70s", ebuf);
+	pclose(fp);
+	rc = ed2klink_to_key(data, size, ed2k);
+	if (rc == 0) {
+		if ((*size != NULL) && (*ed2k != NULL))
+			return 0;
+	}
+	warnx("File not an ed2k link, error=%d in: %-70.70s", rc, filename);
+	return 1;
+}
+
+int
 filename_to_key(const char *filename, char **size, char **ed2k)
 {
 	int rc;
@@ -1106,13 +1183,13 @@ filename_to_key(const char *filename, char **size, char **ed2k)
 	strncpy(kname, filename, sizeof(kname) - 1);
 	kname[sizeof(kname) - 1] = 0;
 
-	rc = ed2klink_to_key(filename,size,ed2k);
+	rc = ed2klink_to_key(filename, size, ed2k);
 	if (rc == 0) {
 		if ((*size != NULL) && (*ed2k != NULL))
 			return 0;
 	}
 
-	base = strrchr(filename, '/' );
+	base = strrchr(filename, '/');
 	if (base != NULL)
 		base ++;
 	else
@@ -1120,14 +1197,18 @@ filename_to_key(const char *filename, char **size, char **ed2k)
 
 	data = localdb_read(Names_db, base);
 	if (data != NULL) {
-		rc = ed2klink_to_key(data,size,ed2k);
+		rc = ed2klink_to_key(data, size, ed2k);
 		if (rc == 0) {
 			if ((*size != NULL) && (*ed2k != NULL))
 				return 0;
 		}
+		warnx("File not an ed2k link, error=%d in: %-70.70s", rc, filename);
+		return 1;
 	}
-	warnx("File not an ed2k link, error=%d in: %-70.70s", rc, filename);
-	return 1;
+	rc = generate_hash(filename, size, ed2k);
+	if (rc == 0)
+		localdb_write_raw(Names_db, base, NULL);
+	return rc;
 }
 
 int
@@ -1377,13 +1458,13 @@ info_show(INFO_TYP *info)
 		}
 		printf("version: %d\n", version);
 		if (decoder.value.censored == 1)
-			printf("censored: uncut\n" );
+			printf("censored: uncut\n");
 		if (decoder.value.censored == 2)
-			printf("censored: censored\n" );
+			printf("censored: censored\n");
 	}
-	if (string_compare(info->f_size,info->f_bytes) != 0)
+	if (string_compare(info->f_size, info->f_bytes) != 0)
 		printf("anidb size: %s\n", info->f_bytes);
-	if (string_compare(info->f_md4,info->f_ed2khash) != 0)
+	if (string_compare(info->f_md4, info->f_ed2khash) != 0)
 		printf("anidb ed2khash: %s\n", info->f_ed2khash);
 	printf("filename: %s\n", info->f_name);
 }
@@ -1395,7 +1476,7 @@ anidb_status(void)
 	char *work;
 
 	work = rbuf;
-	if (strncmp(rbuf,tag,(size_t)(taglen -1)) == 0)
+	if (strncmp(rbuf, tag, (size_t)(taglen -1)) == 0)
 		work += taglen;
 
 	server_status = atoi(work);
@@ -1621,7 +1702,7 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 	case 501:
 	case 506:
 		anidb_nosession();
-		anidb_add(ed2k_link,edit);
+		anidb_add(ed2k_link, edit);
 		return;
 	case 310:
 	case 311:
@@ -1676,7 +1757,7 @@ anidb_mylist(const char *ed2k_link, int force)
 	case 501:
 	case 506:
 		anidb_nosession();
-		return anidb_mylist(ed2k_link,force);
+		return anidb_mylist(ed2k_link, force);
 	case 321:
 		warnx("Server returns: %-70.70s", rbuf);
 		return NULL;
@@ -1964,7 +2045,7 @@ command_run(int argc, const char *const *argv)
 			if (data == NULL)
 				break;
 			mylist_decode(&mylist_entry, cptr, data);
-			if (mylist_edit(&mylist_entry,field) != 0)
+			if (mylist_edit(&mylist_entry, field) != 0)
 				 usage();
 			anidb_add(cptr, &mylist_entry);
 			anidb_mylist(cptr, YES);
