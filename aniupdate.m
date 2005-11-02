@@ -967,7 +967,7 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 	sock_in.sin_len = sizeof(sock_in);
 #endif
 	memcpy(&sock_in.sin_addr, hp->h_addr_list[0],
-		hp->h_length);
+		(unsigned)(hp->h_length));
 	sock_in.sin_port = htons(Remote_port);
 
 #ifdef WITH_UDP
@@ -1527,8 +1527,10 @@ info_show(INFO_TYP *info)
 	char *work;
 
 	work = rbuf;
-	if (strncmp(rbuf, tag, (size_t)(taglen -1)) == 0)
-		work += taglen;
+	if (taglen > 1) {
+		if (strncmp(rbuf, tag, (size_t)(taglen -1)) == 0)
+			work += taglen;
+	}
 
 	server_status = atoi(work);
 	return server_status;
