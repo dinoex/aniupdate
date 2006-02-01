@@ -71,7 +71,7 @@
 
 #define	MAX_BUF		40000
 #define	MAX_KEY		256
-#define	MIN_DELAY	2
+#define	MIN_DELAY	3
 
 #define	NO		0
 #define	YES		1
@@ -121,20 +121,6 @@ typedef struct {
 	const char	*ml_other;
 } MYLIST_TYP;
 
-typedef struct {
-	char		*f_size;
-	char		*f_md4;
-	const char	*f_cached;
-	const char	*f_fid;
-	const char	*f_aid;
-	const char	*f_eid;
-	const char	*f_gid;
-	const char	*f_state;
-	const char	*f_bytes;
-	const char	*f_ed2khash;
-	const char	*f_name;
-} INFO_TYP;
-
 void string_to_lowercase(char *buffer);
 int string_compare(const char *s1, const char *s2);
 
@@ -173,21 +159,23 @@ int filename_to_key(const char *filename, char **size, char **ed2k);
 int generate_hash(const char *filename, char **size, char **ed2k);
 int mylist_decode(MYLIST_TYP *mylist, const char *ed2k_link, const char *data);
 void print_date(const char *prefix, const char *seconds);
-void mylist_show(MYLIST_TYP *mylist);
 int mylist_edit(MYLIST_TYP *mylist, const char *changes);
-int info_decode(INFO_TYP *info, const char *ed2k_link, const char *data);
-void info_show(INFO_TYP *info);
+int show_anidb(const char *const *info, const char *key, const char *data);
 
 int anidb_status(void);
 void anidb_nosession(void);
 void anidb_logout(void);
-void anidb_alive(void);
 void anidb_delay_login(void);
 void anidb_login(void);
+void anidb_alive(void);
 void anidb_ping(void);
-void anidb_add(const char *ed2k_link, MYLIST_TYP *edit);
-char *anidb_mylist(const char *ed2k_link, int force);
-char *anidb_files(const char *ed2k_link, int force);
+void anidb_add(const char *key, MYLIST_TYP *edit);
+char *anidb_fetch(const char *db, const char *cmd, const char *key, int force);
+char *anidb_animes(const char *key, int force);
+char *anidb_episodes(const char *key, int force);
+char *anidb_groups(const char *key, int force);
+char *anidb_files(const char *key, int force);
+char *anidb_mylist(const char *key, int force);
 
 void usage(void);
 void command_config(int argc, const char *const *argv);
@@ -205,6 +193,9 @@ static const char *Files_db = NULL;
 static const char *Hash_program = NULL;
 static const char *Mylist_db = NULL;
 static const char *Names_db = NULL;
+static const char *Animes_db = NULL;
+static const char *Episodes_db = NULL;
+static const char *Groups_db = NULL;
 static const char *User = NULL;
 static const char *Password = NULL;
 static int Debug = NO;
@@ -234,6 +225,7 @@ static char rbuf[MAX_BUF];
 static char sbuf[MAX_BUF];
 static char fbuf[MAX_BUF];
 static char ebuf[MAX_BUF];
+static char cbuf[MAX_KEY];
 static char kbuf[MAX_KEY];
 static char ksize[MAX_KEY];
 static char khash[MAX_KEY];
@@ -247,6 +239,7 @@ static const char C_[] = "";
 static const char C_0[] = "0";
 static const char C_SESSION[] = "session";
 static const char C_NEXT_SEND[] = "next_send";
+static const char C_CACHED[] = "cached";
 
 static long Config_box_anzahl;
 CONFIG_TYP      Config_box[] = {
@@ -256,11 +249,14 @@ CONFIG_TYP      Config_box[] = {
 { 1, { &Add_state            }, "Add_state",          "1" },
 { 0, { &Add_storage          }, "Add_storage",        C_ },
 { 1, { &Add_viewed           }, "Add_viewed",         NULL },
+{ 0, { &Animes_db            }, "Animes_db",          "animes.db" },
 { 1, { &Cache_ignore         }, "Cache_ignore",       NULL },
 { 0, { &Config_file          }, "Config_file",        ".aniupdate" },
 { 0, { &Date_format          }, "Date_format",        "%Y-%m-%d %H:%M:%S" },
 { 1, { &Debug                }, "Debug",              NULL },
+{ 0, { &Episodes_db          }, "Episodes_db",        "episodes.db" },
 { 0, { &Files_db             }, "Files_db",           "files.db" },
+{ 0, { &Groups_db            }, "Groups_db",          "groups.db" },
 { 0, { &Hash_program         }, "Hash_program",       "edonkey-hash" },
 { 1, { &Keep_session         }, "Keep_session",       NULL },
 { 1, { &Local_port           }, "Local_port",         "9000" },
@@ -276,6 +272,77 @@ CONFIG_TYP      Config_box[] = {
 { 0, { &User                 }, "User",               NULL },
 { 1, { &Verbose              }, "Verbose",            NULL },
 { -1, { NULL }, NULL, NULL }
+};
+
+static const char *response_mylist[] = {
+	"lid",
+	"fid",
+	"eid",
+	"aid",
+	"gid",
+	"date",
+	"state",
+	"viewdate",
+	"storage",
+	"source",
+	"other"
+};
+
+static const char *response_file[] = {
+	"fid",
+	"aid",
+	"eid",
+	"gid",
+	"state",
+	"size",
+	"ed2k",
+	"anidbfilename"
+};
+
+static const char *response_anime[] = {
+	"aid",
+	"eps_total",
+	"eps_normal",
+	"eps_special",
+	"rating",
+	"votes",
+	"tmprating",
+	"itmpvotes",
+	"review_rating",
+	"reviews",
+	"year",
+	"type",
+	"romaji",
+	"kanji",
+	"english",
+	"other",
+	"short_names",
+	"synonyms",
+	"category_list"
+};
+
+static const char *response_episode[] = {
+	"eid",
+	"aid",
+	"length",
+	"rating",
+	"votes",
+	"epno",
+	"english",
+	"romaji",
+	"kanji"
+};
+
+static const char *response_group[] = {
+	"gid",
+	"rating",
+	"votes",
+	"acount",
+	"fcount",
+	"name",
+	"short",
+	"irc",
+	"url"
 };
 
 #define	MYLIST_MAX_STATE	6
@@ -1291,37 +1358,7 @@ print_date(const char *prefix, const char *seconds)
 
 	now = lsec;
 	strftime(kbuf, sizeof(kbuf) - 1, Date_format, localtime(&now));
-	printf("%s%s\n", prefix, kbuf);
-
-}
-
-void
-mylist_show(MYLIST_TYP *mylist)
-{
-	printf("size: %s\n", mylist->ml_size);
-	printf("ed2khash: %s\n", mylist->ml_md4);
-	printf("cached: %s\n", mylist->ml_cached);
-	print_date("cachedtext: ", mylist->ml_cached);
-	printf("lid: %s\n", mylist->ml_lid);
-	printf("fid: %s\n", mylist->ml_fid);
-	printf("eid: %s\n", mylist->ml_eid);
-	printf("aid: %s\n", mylist->ml_aid);
-	printf("gid: %s\n", mylist->ml_gid);
-	printf("date: %s\n", mylist->ml_date);
-	print_date("datetext: ", mylist->ml_date);
-	printf("state: %s\n", mylist->ml_state);
-	if (mylist->ml_state != NULL) {
-		int st = -1;
-		st = atoi(mylist->ml_state);
-		if ((st >= 0) && (st < MYLIST_MAX_STATE))
-			printf("statetext: %s\n", mylist_states[st]);
-	}
-	printf("viewdate: %s\n", mylist->ml_viewdate);
-	print_date("viewdatetext: ", mylist->ml_viewdate);
-	printf("storage: %s\n", mylist->ml_storage);
-	printf("source: %s\n", mylist->ml_source);
-	printf("other: %s\n", mylist->ml_other);
-	printf("\n");
+	printf("%stext: %s\n", prefix, kbuf);
 }
 
 int
@@ -1367,108 +1404,92 @@ mylist_edit(MYLIST_TYP *mylist, const char *changes)
 }
 
 int
-info_decode(INFO_TYP *info, const char *ed2k_link, const char *data)
+show_anidb(const char *const *info, const char *key, const char *data)
 {
-	int rc;
-	int state = 0;
 	char *buffer;
 	char *work;
-
-	bzero((char *)info, sizeof(*info));
-	rc = filename_to_key(ed2k_link,&(info->f_size),&(info->f_md4));
-	if (rc != 0)
-		return 1;
+	char *field;
+	char *size;
+	char *md4;
+	INFO_STATE_CONVERT_TYP decoder;
+	int state = -2;
+	int mylist = 0;
+	int files = 0;
+	int st = -1;
+	int version = 1;
+	int rc;
 
 	buffer = strdup(data);
 	if (buffer == NULL)
-		errx(EX_CANTCREAT, "out of memory in info: %-70.70s", ed2k_link);
+		errx(EX_CANTCREAT, "out of memory in info: %-70.70s", key);
 
-	info->f_cached = buffer;
+	field = buffer;
 	work = strchr(buffer, '|');
 	while (work != NULL) {
 		*(work++) = 0;
-		switch (state++) {
-		case 0:
-			info->f_fid = work;
-			break;
-		case 1:
-			info->f_aid = work;
-			break;
-		case 2:
-			info->f_eid = work;
-			break;
-		case 3:
-			info->f_gid = work;
-			break;
-		case 4:
-			info->f_state = work;
-			break;
-		case 5:
-			info->f_bytes = work;
-			break;
-		case 6:
-			info->f_ed2khash = work;
-			break;
-		case 7:
-			info->f_name = work;
+		switch (++state) {
+		case -1:
+			if (strstr(info[0],"lid")) {
+				mylist ++;
+			}
+			if (strstr(info[0],"fid")) {
+				files ++;
+			}
+			if ((files != 0) || (mylist != 0)) {
+				rc = filename_to_key(key, &size, &md4);
+				if (rc != 0)
+					return 1;
+				printf("size: %s\n", size);
+				printf("ed2khash: %s\n", md4);
+			}
+			printf("%s: %s\n", C_CACHED, field);
+			print_date(C_CACHED, field);
 			break;
 		default:
-			return 0;
+			printf("%s: %s\n", info[state], field);
+			if (strstr(info[state],"date")) {
+				print_date(info[state], field);
+			};
+			if (strstr(info[state],"state")) {
+				st = atoi(field);
+				if (mylist != 0) {
+					if ((st >= 0) && (st < MYLIST_MAX_STATE))
+						printf("statetext: %s\n", mylist_states[st]);
+				}
+				if (files != 0) {
+					decoder.numeric = st;
+					printf("crc: %s\n", info_crc[decoder.value.crc]);
+					switch (decoder.value.version) {
+					case 1:
+						version = 2;
+						break;
+					case 2:
+						version = 3;
+						break;
+					case 4:
+						version = 4;
+						break;
+					case 8:
+						version = 5;
+						break;
+					}
+					printf("version: %d\n", version);
+					if (decoder.value.censored == 1)
+						printf("censored: uncut\n");
+					if (decoder.value.censored == 2)
+						printf("censored: censored\n");
+				}
+			};
+			break;
 		}
-		if (*work == 0)
-			return 0;
+		field = work;
 		work = strchr(work, '|');
 	}
+	if ( state >= 0 )
+		printf("%s: %s\n", info[++state], field);
+	printf("\n");
 	return 0;
 }
-
-void
-info_show(INFO_TYP *info)
-{
-	INFO_STATE_CONVERT_TYP decoder;
-
-	printf("size: %s\n", info->f_size);
-	printf("ed2khash: %s\n", info->f_md4);
-	printf("cached: %s\n", info->f_cached);
-	print_date("cachedtext: ", info->f_cached);
-	printf("fid: %s\n", info->f_fid);
-	printf("aid: %s\n", info->f_aid);
-	printf("eid: %s\n", info->f_eid);
-	printf("gid: %s\n", info->f_gid);
-	printf("state: %s\n", info->f_state);
-	if (info->f_state != NULL) {
-		int st = -1;
-		int version = 1;
-		st = atoi(info->f_state);
-		decoder.numeric = st;
-		printf("crc: %s\n", info_crc[decoder.value.crc]);
-		switch (decoder.value.version) {
-		case 1:
-			version = 2;
-			break;
-		case 2:
-			version = 3;
-			break;
-		case 4:
-			version = 4;
-			break;
-		case 8:
-			version = 5;
-			break;
-		}
-		printf("version: %d\n", version);
-		if (decoder.value.censored == 1)
-			printf("censored: uncut\n");
-		if (decoder.value.censored == 2)
-			printf("censored: censored\n");
-	}
-	if (string_compare(info->f_size, info->f_bytes) != 0)
-		printf("anidb size: %s\n", info->f_bytes);
-	if (string_compare(info->f_md4, info->f_ed2khash) != 0)
-		printf("anidb ed2khash: %s\n", info->f_ed2khash);
-	printf("filename: %s\n", info->f_name);
-}
-
 
 int
 anidb_status(void)
@@ -1517,29 +1538,6 @@ anidb_logout(void)
 	/* try to close all sessions */
 	network_send("LOGOUT\n", 0);
 	network_recv(0);
-}
-
-void
-anidb_alive(void)
-{
-	size_t len;
-
-#ifndef WITH_UDP
-	/* TCP gives a welcome */
-	network_recv(0);
-	anidb_status();
-	if (server_status != 100)
-		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
-
-#endif
-
-#ifdef WITH_UDP
-#ifdef WITH_UDP_PING
-	len = snprintf(sbuf, MAX_BUF - 1, "PING\n") + 1;
-	network_send(sbuf, len);
-	network_recv(0);
-#endif
-#endif
 }
 
 void
@@ -1603,7 +1601,7 @@ anidb_login(void)
 	}
 
 	len = snprintf(sbuf, MAX_BUF - 1,
-		"AUTH user=%s&pass=%s&protover=2&client=aniupdate&clientver=1&tag=%s\n",
+		"AUTH user=%s&pass=%s&protover=3&client=aniupdate&clientver=2&tag=%s\n",
 		User, Password, tag);
 	network_send(sbuf, len);
 	network_recv(0);
@@ -1651,6 +1649,29 @@ anidb_login(void)
 }
 
 void
+anidb_alive(void)
+{
+	size_t len;
+
+#ifndef WITH_UDP
+	/* TCP gives a welcome */
+	network_recv(0);
+	anidb_status();
+	if (server_status != 100)
+		errx(EX_TEMPFAIL, "Server returns: %-70.70s", rbuf);
+
+#endif
+
+#ifdef WITH_UDP
+#ifdef WITH_UDP_PING
+	len = snprintf(sbuf, MAX_BUF - 1, "PING\n") + 1;
+	network_send(sbuf, len);
+	network_recv(0);
+#endif
+#endif
+}
+
+void
 anidb_ping(void)
 {
 	size_t len;
@@ -1664,38 +1685,27 @@ anidb_ping(void)
 		warnx("Server returns: %-70.70s", rbuf);
 }
 
-void
-anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
+char *
+anidb_fetch(const char *db, const char *cmd, const char *key, int force)
 {
-	char *size = NULL;
-	char *md4 = NULL;
+	char *work;
+	char *data;
+	char *end;
 	size_t len;
-	int rc;
 
-	if (Verbose != NO)
-		printf("add: %-70.70s\n", ed2k_link);
+	if ((Cache_ignore == NO) && (force == NO) && (db != NULL)) {
+		data = localdb_read(db, key);
+		if (data != NULL)
+			return data;
+	}
 
 	if (session == NULL)
 		anidb_login();
 	if (session == NULL)
-		return;
+		return NULL;
 
-	rc = filename_to_key(ed2k_link,&size,&md4);
-	if (rc != 0)
-		return;
-
-	if (edit != NULL) {
-		len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%s&viewed=%s"
-			"&source=%s&storage=%s&other=%s&edit=1&tag=%s\n",
-			session, size, md4, edit->ml_state, edit->ml_viewdate,
-			edit->ml_source, edit->ml_storage, edit->ml_other, tag) + 1;
-	} else {
-		len = snprintf(sbuf, MAX_BUF - 1, "MYLISTADD s=%s&size=%s&ed2k=%s&state=%d&viewed=%d"
-			"&source=%s&storage=%s&other=%s&tag=%s\n",
-			session, size, md4, Add_state, Add_viewed,
-			Add_source, Add_storage, Add_other, tag) + 1;
-	}
-
+	len = snprintf(sbuf, MAX_BUF - 1, "%s&s=%s&tag=%s\n",
+		cmd, session, tag) + 1;
 	network_send(sbuf, len);
 	network_recv(0);
 
@@ -1704,131 +1714,22 @@ anidb_add(const char *ed2k_link, MYLIST_TYP *edit)
 	case 501:
 	case 506:
 		anidb_nosession();
-		anidb_add(ed2k_link, edit);
-		return;
+		return anidb_fetch(db, cmd, key, force);
 	case 310:
 	case 311:
-		warnx("Server returns: %-70.70s", rbuf);
-		return;
-	case 210:
-		return;
-	case 500:
-	case 502:
-		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
-	default:
-		warnx("Server returns: %-70.70s", rbuf);
-	}
-}
-
-char *
-anidb_mylist(const char *ed2k_link, int force)
-{
-	char *size = NULL;
-	char *md4 = NULL;
-	char *work;
-	char *data;
-	char *end;
-	size_t len;
-	int rc;
-
-	if (Verbose != NO)
-		printf("add: %-70.70s\n", ed2k_link);
-
-	rc = filename_to_key(ed2k_link,&size,&md4);
-	if (rc != 0)
-		return NULL;
-
-	if ((Cache_ignore == NO) && (force == NO)) {
-		data = localdb_read_ed2k(Mylist_db, size, md4);
-		if (data != NULL)
-			return data;
-	}
-
-	if (session == NULL)
-		anidb_login();
-	if (session == NULL)
-		return NULL;
-
-	len = snprintf(sbuf, MAX_BUF - 1, "MYLIST s=%s&size=%s&ed2k=%s&tag=%s\n",
-		session, size, md4, tag) + 1;
-	network_send(sbuf, len);
-	network_recv(0);
-
-	anidb_status();
-	switch (server_status) {
-	case 501:
-	case 506:
-		anidb_nosession();
-		return anidb_mylist(ed2k_link, force);
-	case 321:
-		warnx("Server returns: %-70.70s", rbuf);
-		return NULL;
-	case 221:
-		break;
-	case 500:
-	case 502:
-		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
-	default:
-		warnx("Server returns: %-70.70s", rbuf);
-		return NULL;
-	}
-
-	/* we have data */
-	work = rbuf + taglen;
-	data = strchr(work, '\n');
-	if (data == NULL)
-		data = work + 3;
-	end = strchr(++data, '\n');
-	if (end != NULL)
-		*end = 0;
-	localdb_write_ed2k(Mylist_db, size, md4, data);
-	return fbuf;
-}
-
-char *
-anidb_files(const char *ed2k_link, int force)
-{
-	char *size = NULL;
-	char *md4 = NULL;
-	char *work;
-	char *data;
-	char *end;
-	size_t len;
-	int rc;
-
-	if (Verbose != NO)
-		printf("add: %-70.70s\n", ed2k_link);
-
-	rc = filename_to_key(ed2k_link,&size,&md4);
-	if (rc != 0)
-		return NULL;
-
-	if ((Cache_ignore == NO) && (force == NO)) {
-		data = localdb_read_ed2k(Files_db, size, md4);
-		if (data != NULL)
-			return data;
-	}
-
-	if (session == NULL)
-		anidb_login();
-	if (session == NULL)
-		return NULL;
-
-	len = snprintf(sbuf, MAX_BUF - 1, "FILE s=%s&size=%s&ed2k=%s&tag=%s\n",
-		session, size, md4, tag) + 1;
-	network_send(sbuf, len);
-	network_recv(0);
-
-	anidb_status();
-	switch (server_status) {
-	case 501:
-	case 506:
-		anidb_nosession();
-		return anidb_files(ed2k_link, force);
 	case 320:
+	case 321:
+	case 330:
+	case 340:
+	case 350:
 		warnx("Server returns: %-70.70s", rbuf);
 		return NULL;
+	case 210:
 	case 220:
+	case 221:
+	case 230:
+	case 240:
+	case 250:
 		break;
 	case 500:
 	case 502:
@@ -1837,6 +1738,8 @@ anidb_files(const char *ed2k_link, int force)
 		warnx("Server returns: %-70.70s", rbuf);
 		return NULL;
 	}
+	if (db == NULL)
+		return fbuf;
 
 	/* we have data */
 	work = rbuf + taglen;
@@ -1846,8 +1749,115 @@ anidb_files(const char *ed2k_link, int force)
 	end = strchr(++data, '\n');
 	if (end != NULL)
 		*end = 0;
-	localdb_write_ed2k(Files_db, size, md4, data);
+	localdb_write(db, key, data);
 	return fbuf;
+}
+
+char *
+anidb_animes(const char *key, int force)
+{
+	if (Verbose != NO)
+		printf("animes: %-70.70s\n", key);
+
+	snprintf(cbuf, MAX_BUF - 1, "ANIME aid=%s",
+		key);
+	return anidb_fetch(Animes_db, cbuf, key, force);
+}
+
+char *
+anidb_episodes(const char *key, int force)
+{
+	if (Verbose != NO)
+		printf("episodes: %-70.70s\n", key);
+
+	snprintf(cbuf, MAX_BUF - 1, "EPISODE eid=%s",
+		key);
+	return anidb_fetch(Episodes_db, cbuf, key, force);
+}
+
+char *
+anidb_groups(const char *key, int force)
+{
+	if (Verbose != NO)
+		printf("groups: %-70.70s\n", key);
+
+	snprintf(cbuf, MAX_BUF - 1, "GROUP gid=%s",
+		key);
+	return anidb_fetch(Groups_db, cbuf, key, force);
+}
+
+char *
+anidb_files(const char *key, int force)
+{
+	char *size = NULL;
+	char *md4 = NULL;
+	int rc;
+
+	if (Verbose != NO)
+		printf("files: %-70.70s\n", key);
+
+	rc = filename_to_key(key,&size,&md4);
+	if (rc != 0)
+		return NULL;
+
+	snprintf(kbuf, sizeof(kbuf) - 1, "%s|%s", size, md4);
+#if defined(WITH_BETA)
+	snprintf(cbuf, MAX_BUF - 1, "FILE size=%s&ed2k=%s&fcode=33556239&acode=4195074",
+		size, md4);
+#else
+	snprintf(cbuf, MAX_BUF - 1, "FILE size=%s&ed2k=%s",
+		size, md4);
+#endif
+	return anidb_fetch(Files_db, cbuf, kbuf, force);
+}
+
+char *
+anidb_mylist(const char *key, int force)
+{
+	char *size = NULL;
+	char *md4 = NULL;
+	int rc;
+
+	if (Verbose != NO)
+		printf("mylist: %-70.70s\n", key);
+
+	rc = filename_to_key(key,&size,&md4);
+	if (rc != 0)
+		return NULL;
+
+	snprintf(kbuf, sizeof(kbuf) - 1, "%s|%s", size, md4);
+	snprintf(cbuf, MAX_BUF - 1, "MYLIST size=%s&ed2k=%s",
+		size, md4);
+	return anidb_fetch(Mylist_db, cbuf, kbuf, force);
+}
+
+void
+anidb_add(const char *key, MYLIST_TYP *edit)
+{
+	char *size = NULL;
+	char *md4 = NULL;
+	int rc;
+
+	if (Verbose != NO)
+		printf("add: %-70.70s\n", key);
+
+	rc = filename_to_key(key,&size,&md4);
+	if (rc != 0)
+		return;
+
+	snprintf(kbuf, sizeof(kbuf) - 1, "%s|%s", size, md4);
+	if (edit != NULL) {
+		snprintf(cbuf, MAX_BUF - 1, "MYLISTADD size=%s&ed2k=%s&state=%s&viewed=%s"
+			"&source=%s&storage=%s&other=%s&edit=1\n",
+			size, md4, edit->ml_state, edit->ml_viewdate,
+			edit->ml_source, edit->ml_storage, edit->ml_other);
+	} else {
+		snprintf(cbuf, MAX_BUF - 1, "MYLISTADD size=%s&ed2k=%s&state=%d&viewed=%d"
+			"&source=%s&storage=%s&other=%s\n",
+			size, md4, Add_state, Add_viewed,
+			Add_source, Add_storage, Add_other);
+	}
+	anidb_fetch(NULL, cbuf, kbuf, 0);
 }
 
 
@@ -1870,11 +1880,15 @@ void usage(void)
 "\n"
 " commands:\n"
 "+ping                    test communication\n"
-"+add ed2klink [...]      add files to mylist\n"
+"+mylist ed2klink [...]   add files to mylist\n"
 "+read ed2klink [...]     read mylist info\n"
 "+view ed2klink [...]     set files as viewed (date will not be preserved)\n"
 "+unview ed2klink [...]   set files as unviewed\n"
-"+edit key=value ed2klink [...]   change a field in mylist\n"
+"+write key=value ed2klink [...]   change a field in mylist\n"
+"+anime id [...]          read anime info\n"
+"+episode id [...]        read episode info\n"
+"+group id [...]          read group info\n"
+"+file ed2klink [...]     read file info\n"
 "\n"
 "\n");
 	exit(EX_USAGE);
@@ -1965,12 +1979,15 @@ command_options(int argc, const char *const *argv)
 		if (*cptr == '+') {
 			ch = *(++cptr);
 			switch (ch) {
-			case 'e': /* edit mylist */
+			case 'w': /* edit mylist */
 				GET_NEXT_DATA(cptr);
 				fc = ch;
 				break;
-			case 'a': /* add to mylist */
-			case 'f': /* read from anidb */
+			case 'a': /* read anime from anidb */
+			case 'e': /* read episode from anidb */
+			case 'f': /* read file from anidb */
+			case 'g': /* read group from anidb */
+			case 'm': /* add to mylist */
 			case 'p': /* ping */
 			case 'r': /* read from mylist */
 			case 'u': /* set unviewied in mylist */
@@ -1987,9 +2004,12 @@ command_options(int argc, const char *const *argv)
 		case 'a':
 		case 'e':
 		case 'f':
+		case 'g':
+		case 'm':
 		case 'r':
 		case 'u':
 		case 'v':
+		case 'w':
 			break;
 		default:
 			usage();
@@ -2007,7 +2027,6 @@ command_run(int argc, const char *const *argv)
 	char fc = 0;
 	const char *data;
 	MYLIST_TYP mylist_entry;
-	INFO_TYP file_entry;
 	const char *field = NULL;
 
 	while (--argc > 0) {
@@ -2018,7 +2037,7 @@ command_run(int argc, const char *const *argv)
 		if (*cptr == '+') {
 			ch = *(++cptr);
 			switch (ch) {
-			case 'e': /* edit mylist */
+			case 'w': /* edit mylist */
 				fc = ch;
 				GET_NEXT_DATA(cptr);
 				field = cptr;
@@ -2026,8 +2045,11 @@ command_run(int argc, const char *const *argv)
 			case 'p': /* ping */
 				anidb_ping();
 				/* FALLTHROUGH */
-			case 'a': /* add to mylist */
-			case 'f': /* read from anidb */
+			case 'a': /* read anime from anidb */
+			case 'e': /* read episode from anidb */
+			case 'f': /* read file from anidb */
+			case 'g': /* read group from anidb */
+			case 'm': /* add to mylist */
 			case 'r': /* read from mylist */
 			case 'u': /* set unviewied in mylist */
 			case 'v': /* set viewied in mylist */
@@ -2040,17 +2062,20 @@ command_run(int argc, const char *const *argv)
 		}
 		switch (fc) {
 		case 'a':
-			anidb_add(cptr, NULL);
-			break;
-		case 'e':
-			data = anidb_mylist(cptr, NO);
+			data = anidb_animes(cptr, NO);
 			if (data == NULL)
 				break;
-			mylist_decode(&mylist_entry, cptr, data);
-			if (mylist_edit(&mylist_entry, field) != 0)
-				 usage();
-			anidb_add(cptr, &mylist_entry);
-			anidb_mylist(cptr, YES);
+			if (Quiet != NO)
+				break;
+			show_anidb(response_anime, cptr, data);
+			break;
+		case 'e':
+			data = anidb_episodes(cptr, NO);
+			if (data == NULL)
+				break;
+			if (Quiet != NO)
+				break;
+			show_anidb(response_episode, cptr, data);
 			break;
 		case 'f':
 			data = anidb_files(cptr, NO);
@@ -2058,8 +2083,18 @@ command_run(int argc, const char *const *argv)
 				break;
 			if (Quiet != NO)
 				break;
-			info_decode(&file_entry, cptr, data);
-			info_show(&file_entry);
+			show_anidb(response_file, cptr, data);
+			break;
+		case 'g':
+			data = anidb_groups(cptr, NO);
+			if (data == NULL)
+				break;
+			if (Quiet != NO)
+				break;
+			show_anidb(response_group, cptr, data);
+			break;
+		case 'm':
+			anidb_add(cptr, NULL);
 			break;
 		case 'r':
 			data = anidb_mylist(cptr, NO);
@@ -2067,8 +2102,17 @@ command_run(int argc, const char *const *argv)
 				break;
 			if (Quiet != NO)
 				break;
+			show_anidb(response_mylist, cptr, data);
+			break;
+		case 'w':
+			data = anidb_mylist(cptr, NO);
+			if (data == NULL)
+				break;
 			mylist_decode(&mylist_entry, cptr, data);
-			mylist_show(&mylist_entry);
+			if (mylist_edit(&mylist_entry, field) != 0)
+				 usage();
+			anidb_add(cptr, &mylist_entry);
+			data = anidb_mylist(cptr, YES);
 			break;
 		case 'u':
 			data = anidb_mylist(cptr, NO);
