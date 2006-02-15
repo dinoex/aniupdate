@@ -62,7 +62,7 @@ OBJCLIBS?=	-lobjc -lc_r
 .endif
 .endif
 
-NOMAN=YES
+NO_MAN=YES
 
 .include <bsd.prog.mk>
 
