@@ -74,6 +74,7 @@
 #define	MAX_BUF		40000
 #define	MAX_KEY		256
 #define	MIN_DELAY	3
+#define	MAX_DELAY	31
 
 #define	GET_NEXT_DATA(x)	{ argv++; argc--; x = *argv; \
 				if (x == NULL) usage(); }
@@ -154,9 +155,7 @@ void localdb_cleanup(const char *name, time_t valid_from);
 void localdb_delete(const char *name, const char *hash);
 void localdb_write(const char *name, const char *hash, const char *value);
 void localdb_write_raw(const char *name, const char *hash, const char *value);
-void localdb_write_ed2k(const char *name, const char *size, const char *md4, const char *value);
 char *localdb_read(const char *name, const char *hash);
-char *localdb_read_ed2k(const char *name, const char *size, const char *md4);
 
 @interface network_c : Object
 {
@@ -252,12 +251,14 @@ static int Verbose = NO;
 static int Quiet = NO;
 static int Add_state;
 static int Add_viewed;
+static int Batch_mode;
 static int Cache_ignore;
 static int Keep_session;
 static int Local_port;
 static int Remote_port;
 static int Retrys;
 static int Timeout;
+static long Batch_count = 0;
 
 static char fbuf[MAX_BUF];
 static char ebuf[MAX_BUF];
@@ -279,6 +280,7 @@ CONFIG_TYP      Config_box[] = {
 { 0, { &Add_storage          }, "Add_storage",        C_ },
 { 1, { &Add_viewed           }, "Add_viewed",         NULL },
 { 0, { &Animes_db            }, "Animes_db",          "animes.db" },
+{ 1, { &Batch_mode           }, "Batch_mode",         "0" },
 { 1, { &Cache_ignore         }, "Cache_ignore",       NULL },
 { 0, { &Config_file          }, "Config_file",        ".aniupdate" },
 { 0, { &Date_format          }, "Date_format",        "%Y-%m-%d %H:%M:%S" },
@@ -370,6 +372,7 @@ static const char *response_group[] = {
 	"fcount",
 	"name",
 	"short",
+	"chan",
 	"irc",
 	"url"
 };
@@ -533,7 +536,7 @@ local_read(const char *name)
 
 	/* names must be sorrtet */
 	config = box;
-	for (i = 1L; config[i].typ != -1; i ++) {
+	for (i = 0L; config[i].typ != -1; i ++) {
 		if (config[i + 1].typ == -1)
 			break;
 		flag = string_compare(config[i].name, config[i + 1].name);
@@ -546,7 +549,7 @@ local_read(const char *name)
 	anzahl = i + 1;
 
 	/* set defaults */
-	for (i = 1L; config[i].typ != -1; i ++) {
+	for (i = 0L; config[i].typ != -1; i ++) {
 		switch (config[i].typ) {
 		case CT_STRING:
 		case CT_LOWER_STRING:
@@ -889,15 +892,6 @@ localdb_write_raw(const char *name, const char *hash, const char *value)
 	db->close(db);
 }
 
-void
-localdb_write_ed2k(const char *name, const char *size, const char *md4, const char *value)
-{
-	size_t len;
-
-	len = snprintf(kbuf, sizeof(kbuf) - 1, "%s|%s", size, md4);
-	localdb_write(name, kbuf, value);
-}
-
 char *
 localdb_read(const char *name, const char *hash)
 {
@@ -941,15 +935,6 @@ localdb_read(const char *name, const char *hash)
 	free(hash2);
 	db->close(db);
 	return str;
-}
-
-char *
-localdb_read_ed2k(const char *name, const char *size, const char *md4)
-{
-	size_t len;
-
-	len = snprintf(kbuf, MAX_BUF - 1, "%s|%s", size, md4);
-	return localdb_read(name, kbuf);
 }
 
 @implementation network_c : Object
@@ -1117,7 +1102,11 @@ localdb_read_ed2k(const char *name, const char *size, const char *md4)
 		err(EX_OSERR, "send failed");
 #endif
 
-	next_send = time(NULL) + MIN_DELAY;
+	Batch_count ++;
+	if ((Batch_mode != 0) || (Batch_count > 50))
+		next_send = time(NULL) + MAX_DELAY;
+	else
+		next_send = time(NULL) + MIN_DELAY;
 }
 
 - (void) send: (const char *) buf: (size_t) len
@@ -1673,7 +1662,10 @@ show_anidb(const char *const *info, const char *key, const char *data)
 		[self delay_login];
 		errx(EX_SOFTWARE, "Server returns: %-70.70s", rbuf);
 		break;
+	case 507:
+	case 555:
 	case 601:
+	case 666:
 		[network_o delay: 30 * 60];
 		/* FALLTHROUGH */
 	default:
@@ -1772,7 +1764,15 @@ show_anidb(const char *const *info, const char *key, const char *data)
 	case 230:
 	case 240:
 	case 250:
+		/* Update valid Session */
+		localdb_write(Session_db, C_SESSION, session);
 		break;
+	case 507:
+	case 555:
+	case 601:
+	case 666:
+		[network_o delay: 30 * 60];
+		/* FALLTHROUGH */
 	case 500:
 	case 502:
 		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
@@ -1781,7 +1781,7 @@ show_anidb(const char *const *info, const char *key, const char *data)
 		return NULL;
 	}
 	if (db == NULL)
-		return fbuf;
+		return rbuf;
 
 	/* we have data */
 	work = rbuf + taglen;
@@ -1884,12 +1884,12 @@ show_anidb(const char *const *info, const char *key, const char *data)
 	snprintf(kbuf, sizeof(kbuf) - 1, "%s|%s", size, md4);
 	if (edit != NULL) {
 		snprintf(cbuf, MAX_BUF - 1, "MYLISTADD size=%s&ed2k=%s&state=%s&viewed=%s"
-			"&source=%s&storage=%s&other=%s&edit=1\n",
+			"&source=%s&storage=%s&other=%s&edit=1",
 			size, md4, edit->ml_state, edit->ml_viewdate,
 			edit->ml_source, edit->ml_storage, edit->ml_other);
 	} else {
 		snprintf(cbuf, MAX_BUF - 1, "MYLISTADD size=%s&ed2k=%s&state=%d&viewed=%d"
-			"&source=%s&storage=%s&other=%s\n",
+			"&source=%s&storage=%s&other=%s",
 			size, md4, Add_state, Add_viewed,
 			Add_source, Add_storage, Add_other);
 	}
