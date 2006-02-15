@@ -43,6 +43,7 @@
 #include <sys/uio.h>
 #include <sys/time.h>
 #include <sys/file.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -243,7 +244,7 @@ static const char C_NEXT_SEND[] = "next_send";
 static const char C_CACHED[] = "cached";
 
 static long Config_box_anzahl;
-CONFIG_TYP      Config_box[] = {
+CONFIG_TYP Config_box[] = {
 { -1, { &Config_box_anzahl   }, "_Config_box_anzahl", NULL },
 { 0, { &Add_other            }, "Add_other",          C_ },
 { 0, { &Add_source           }, "Add_source",         C_ },
@@ -428,26 +429,26 @@ string_compare(const char *s1, const char *s2)
 FILE *
 file_open(const char *datei, const char *mode)
 {
-        FILE *handle;
+	FILE *handle;
 
-        if (datei == NULL)
-                return (NULL);
+	if (datei == NULL)
+		return (NULL);
 
-        handle = fopen(datei, mode);
-        if (handle == NULL) {
+	handle = fopen(datei, mode);
+	if (handle == NULL) {
 		if (errno != ENOENT)
 			err(EX_NOINPUT, "cannot open file %s", datei);
 	}
-        return handle;
+	return handle;
 }
 
 void
 file_seek(FILE *handle, long bytes, int mode)
 {
-        int seek_status;
+	int seek_status;
 
-        seek_status = fseek(handle, bytes, mode);
-        if (seek_status != 0)
+	seek_status = fseek(handle, bytes, mode);
+	if (seek_status != 0)
 		err(EX_IOERR, "cannot seek file, state=%d, pos=%ld, mode=%d",
 			seek_status, bytes, mode);
 }
@@ -455,24 +456,24 @@ file_seek(FILE *handle, long bytes, int mode)
 long
 file_size(FILE *handle)
 {
-        long size;
+	long size;
 
-        file_seek(handle, 0L, SEEK_END);
-        size = ftell(handle);
-        file_seek(handle, 0L, SEEK_SET);
-        if (size < 0L)
+	file_seek(handle, 0L, SEEK_END);
+	size = ftell(handle);
+	file_seek(handle, 0L, SEEK_SET);
+	if (size < 0L)
 		err(EX_IOERR, "cannot read length of file, state=%ld",
-                        size);
-        return size;
+			size);
+	return size;
 }
 
 void
 file_read(void *buffer, size_t bytes, size_t count, FILE *handle)
 {
-        size_t read_status;
+	size_t read_status;
 
-        read_status = fread(buffer, bytes, count, handle);
-        if (read_status != count)
+	read_status = fread(buffer, bytes, count, handle);
+	if (read_status != count)
 		err(EX_IOERR, "cannot read %ld bytes from file, count=%ld got=%ld",
 			(long)bytes, (long)count, (long)read_status);
 }
@@ -481,18 +482,18 @@ file_read(void *buffer, size_t bytes, size_t count, FILE *handle)
 char *
 local_read(const char *name)
 {
-        size_t size;
-        FILE *handle;
-        char *buffer;
+	size_t size;
+	FILE *handle;
+	char *buffer;
 
-        handle = file_open(name, "rb");
-        if (handle == NULL)
-                return NULL;
-        size = file_size(handle);
-        buffer = malloc(size);
-        file_read(buffer, size, 1, handle);
-        fclose(handle);
-        return buffer;
+	handle = file_open(name, "rb");
+	if (handle == NULL)
+		return NULL;
+	size = file_size(handle);
+	buffer = malloc(size);
+	file_read(buffer, size, 1, handle);
+	fclose(handle);
+	return buffer;
 }
 
 
@@ -660,7 +661,7 @@ config_read(const char *filename)
 
 	buffer = local_read(filename);
 	if (buffer == NULL)
-                return;
+		return;
 
 	line = strtok(buffer, delimiter);
 	while (line != NULL) {
@@ -1086,6 +1087,8 @@ network_send(const char *buf, size_t len)
 int
 network_recv(size_t len)
 {
+	fd_set set;
+	struct timeval stimeout;
 	long llen;
 
 	if (connected == NO)
@@ -1094,6 +1097,18 @@ network_recv(size_t len)
 	if (len == 0)
 		len = MAX_BUF - 1;
 
+	FD_ZERO(&set);
+	FD_SET(s, &set);
+	stimeout.tv_sec = Timeout;
+	stimeout.tv_usec = 0;
+	if ( ( select( s + 1, &set, NULL, NULL, &stimeout ) ) <= 0 )  {
+		warn("recv %ld", 0L);
+		retry_count --;
+		network_retry();
+		return network_recv(len);
+	}
+
+	/* data to read ? */
 	bzero(rbuf, sizeof(rbuf));
 #ifdef USE_READ
 	llen = read(s, rbuf, len);
@@ -1106,7 +1121,7 @@ network_recv(size_t len)
 			next_send = time(NULL);
 			next_send += 30 * 60;
 			network_save();
-		        err(EX_TEMPFAIL, "recv %ld", llen);
+			err(EX_TEMPFAIL, "recv %ld", llen);
 		}
 		if ((errno != EAGAIN) || (retry_count == 0) || (retry_len == 0))
 			err(EX_OSERR, "recv %ld", llen);
@@ -1212,7 +1227,7 @@ generate_hash(const char *filename, char **size, char **ed2k)
 	if (fp == NULL)
 		err(EX_IOERR, "cannot execute hash from program: %-70.70s", ebuf);
 	data = fgets(fbuf, sizeof(fbuf) -1, fp);
-        if (data == NULL)
+	if (data == NULL)
 		err(EX_IOERR, "cannot get hash from program: %-70.70s", ebuf);
 	pclose(fp);
 	rc = ed2klink_to_key(data, size, ed2k);
@@ -1582,10 +1597,10 @@ anidb_login(void)
 			valid_from = time(NULL);
 			valid_from -= (24 * 60 * 60);
 			tv = atol(data);
-                        if (tv > valid_from) {
+			if (tv > valid_from) {
 				session = strdup(++work);
 				return;
-                        }
+			}
 		}
 	}
 
@@ -1980,7 +1995,6 @@ command_options(int argc, const char *const *argv)
 			switch (ch) {
 			case 'w': /* edit mylist */
 				GET_NEXT_DATA(cptr);
-				fc = ch;
 				break;
 			case 'a': /* read anime from anidb */
 			case 'e': /* read episode from anidb */
@@ -1991,11 +2005,11 @@ command_options(int argc, const char *const *argv)
 			case 'r': /* read from mylist */
 			case 'u': /* set unviewied in mylist */
 			case 'v': /* set viewied in mylist */
-				fc = ch;
 				break;
 			default:
 				usage();
 			}
+			fc = ch;
 			continue;
 		}
 		/* Arguments for */
