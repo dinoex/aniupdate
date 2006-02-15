@@ -72,6 +72,7 @@
 #define	MAX_BUF		40000
 #define	MAX_KEY		256
 #define	MIN_DELAY	3
+#define	MAX_DELAY	31
 
 #define	NO		0
 #define	YES		1
@@ -143,9 +144,7 @@ void localdb_cleanup(const char *name, time_t valid_from);
 void localdb_delete(const char *name, const char *hash);
 void localdb_write(const char *name, const char *hash, const char *value);
 void localdb_write_raw(const char *name, const char *hash, const char *value);
-void localdb_write_ed2k(const char *name, const char *size, const char *md4, const char *value);
 char *localdb_read(const char *name, const char *hash);
-char *localdb_read_ed2k(const char *name, const char *size, const char *md4);
 
 void network_save(void);
 void network_close(void);
@@ -203,12 +202,14 @@ static int Verbose = NO;
 static int Quiet = NO;
 static int Add_state;
 static int Add_viewed;
+static int Batch_mode;
 static int Cache_ignore;
 static int Keep_session;
 static int Local_port;
 static int Remote_port;
 static int Retrys;
 static int Timeout;
+static long Batch_count = 0;
 
 static int connected = NO;
 static int s = -1;
@@ -250,6 +251,7 @@ CONFIG_TYP      Config_box[] = {
 { 0, { &Add_storage          }, "Add_storage",        C_ },
 { 1, { &Add_viewed           }, "Add_viewed",         NULL },
 { 0, { &Animes_db            }, "Animes_db",          "animes.db" },
+{ 1, { &Batch_mode           }, "Batch_mode",         "0" },
 { 1, { &Cache_ignore         }, "Cache_ignore",       NULL },
 { 0, { &Config_file          }, "Config_file",        ".aniupdate" },
 { 0, { &Date_format          }, "Date_format",        "%Y-%m-%d %H:%M:%S" },
@@ -341,6 +343,7 @@ static const char *response_group[] = {
 	"fcount",
 	"name",
 	"short",
+	"chan",
 	"irc",
 	"url"
 };
@@ -863,15 +866,6 @@ localdb_write_raw(const char *name, const char *hash, const char *value)
 	db->close(db);
 }
 
-void
-localdb_write_ed2k(const char *name, const char *size, const char *md4, const char *value)
-{
-	size_t len;
-
-	len = snprintf(kbuf, sizeof(kbuf) - 1, "%s|%s", size, md4);
-	localdb_write(name, kbuf, value);
-}
-
 char *
 localdb_read(const char *name, const char *hash)
 {
@@ -917,15 +911,6 @@ localdb_read(const char *name, const char *hash)
 	return str;
 }
 
-char *
-localdb_read_ed2k(const char *name, const char *size, const char *md4)
-{
-	size_t len;
-
-	len = snprintf(kbuf, MAX_BUF - 1, "%s|%s", size, md4);
-	return localdb_read(name, kbuf);
-}
-
 void
 network_save(void)
 {
@@ -936,7 +921,7 @@ network_save(void)
 	now = time(NULL);
 	delay = next_send - now;
 	if (delay > 0) {
-		snprintf(ldata, sizeof(ldata) - 1, "%lu", next_send);
+		snprintf(ldata, sizeof(ldata) - 1, "%lu", (unsigned long)next_send);
 		localdb_write(Session_db, C_NEXT_SEND, ldata);
 	} else {
 		localdb_delete(Session_db, C_NEXT_SEND);
@@ -1077,7 +1062,11 @@ network_retry(void)
 		err(EX_OSERR, "send failed");
 #endif
 
-	next_send = time(NULL) + MIN_DELAY;
+	Batch_count ++;
+	if ((Batch_mode != 0) || (Batch_count > 50))
+		next_send = time(NULL) + MAX_DELAY;
+	else
+		next_send = time(NULL) + MIN_DELAY;
 }
 
 void
@@ -1626,7 +1615,10 @@ anidb_login(void)
 		anidb_delay_login();
 		errx(EX_SOFTWARE, "Server returns: %-70.70s", rbuf);
 		break;
+	case 507:
+	case 555:
 	case 601:
+	case 666:
 		next_send += 30 * 60;
 		network_save();
 		/* FALLTHROUGH */
@@ -1731,6 +1723,13 @@ anidb_fetch(const char *db, const char *cmd, const char *key, int force)
 	case 240:
 	case 250:
 		break;
+	case 507:
+	case 555:
+	case 601:
+	case 666:
+		next_send += 30 * 60;
+		network_save();
+		/* FALLTHROUGH */
 	case 500:
 	case 502:
 		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
@@ -1739,7 +1738,7 @@ anidb_fetch(const char *db, const char *cmd, const char *key, int force)
 		return NULL;
 	}
 	if (db == NULL)
-		return fbuf;
+		return rbuf;
 
 	/* we have data */
 	work = rbuf + taglen;
@@ -1848,12 +1847,12 @@ anidb_add(const char *key, MYLIST_TYP *edit)
 	snprintf(kbuf, sizeof(kbuf) - 1, "%s|%s", size, md4);
 	if (edit != NULL) {
 		snprintf(cbuf, MAX_BUF - 1, "MYLISTADD size=%s&ed2k=%s&state=%s&viewed=%s"
-			"&source=%s&storage=%s&other=%s&edit=1\n",
+			"&source=%s&storage=%s&other=%s&edit=1",
 			size, md4, edit->ml_state, edit->ml_viewdate,
 			edit->ml_source, edit->ml_storage, edit->ml_other);
 	} else {
 		snprintf(cbuf, MAX_BUF - 1, "MYLISTADD size=%s&ed2k=%s&state=%d&viewed=%d"
-			"&source=%s&storage=%s&other=%s\n",
+			"&source=%s&storage=%s&other=%s",
 			size, md4, Add_state, Add_viewed,
 			Add_source, Add_storage, Add_other);
 	}
