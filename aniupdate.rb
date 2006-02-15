@@ -599,7 +599,12 @@ class Anidb_Api
 		if db.nil?
 			return @rbuf
 		end
-		return db.write( key, @mbuf[3 .. -1] )
+		status, text, rest = @mbuf.split( "\n", 3 )
+		if text.nil?
+			STDERR.print "Server returns: #{@rbuf}\n"
+			return nil
+		end
+		return db.write( key, text )
 	end
 
 	def animes( key, force )
