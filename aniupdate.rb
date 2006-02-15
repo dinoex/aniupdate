@@ -958,6 +958,7 @@ def command_config( argv )
 end
 
 def command_options( argv )
+	fc = ""
 	largv = Array.new
 	largv += argv
 	loop do
@@ -987,32 +988,33 @@ def command_options( argv )
 			when "v"
 				$config[ 'Verbose' ] = 1
 			else
-p arg
 				usage
 			end
 			next
 		end
 		# sntax check
 		if arg[ 0 .. 0 ] == "+"
-			case arg[ 1 .. 1 ].downcase
-			when "p"
-			when "a", "e", "f", "g", "m", "r", "u", "v"
-				largv.shift
+			fc = arg[ 1 .. 1 ].downcase
+			case fc
+			when "a", "e", "f", "g", "m", 'p', "r", "u", "v"
 			when "w"
 				largv.shift
-				largv.shift
 			else
-p arg
 				usage
 			end
 			next
 		end
-p arg
-		usage
+		case fc
+		when "a", "e", "f", "g", "m", "r", "u", "v", 'w'
+		else
+			usage
+		end
 	end
 end
 
 def command_run( argv )
+	write = nil
+	fc = ""
 	largv = Array.new
 	largv += argv
 	loop do
@@ -1020,86 +1022,85 @@ def command_run( argv )
 		if arg.nil?
 			return
 		end
+		if arg[ 0 .. 0 ] == "-"
+			next
+		end
 		if arg[ 0 .. 0 ] == "+"
-			case arg[ 1 .. 1 ].downcase
-			when "p"
+			fc = arg[ 1 .. 1 ].downcase
+			case fc
+			when 'p'
 				$anidb.ping
-			when "a"
-				key = largv.shift
-				data = $anidb.animes( key, 0 )
-				if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
-					next
-				end
-				show_anidb($response_anime, key, data)
-			when "e"
-				key = largv.shift
-				data = $anidb.episodes( key, 0 )
-				if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
-					next
-				end
-				show_anidb($response_episode, key, data)
-			when "f"
-				key = largv.shift
-				data = $anidb.files( key, 0 )
-				if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
-					next
-				end
-				show_anidb($response_file, key, data)
-			when "g"
-				key = largv.shift
-				data = $anidb.groups( key, 0 )
-				if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
-					next
-				end
-				show_anidb($response_group, key, data)
-			when "m"
-				key = largv.shift
-				$anidb.add( key, nil )
-			when "r"
-				key = largv.shift
-				data = $anidb.mylist( key, 0 )
-				if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
-					next
-				end
-				show_anidb($response_mylist, key, data)
-			when "u"
-				key = largv.shift
-				data = $anidb.mylist( key, 0 )
-				if ( data.nil? )
-					next
-				end
-				mylist_entry = mylist_decode(key, data)
-				mylist_entry[ 'viewdate' ] = "0"
-				$anidb.add( key, mylist_entry )
-				data = $anidb.mylist( key, 1 )
-			when "v"
-				key = largv.shift
-				data = $anidb.mylist( key, 0 )
-				if ( data.nil? )
-					next
-				end
-				mylist_entry = mylist_decode(key, data)
-				if mylist_entry[ 'viewdate' ] != "0"
-					next
-				end
-				mylist_entry[ 'viewdate' ] = "1"
-				$anidb.add( key, mylist_entry )
-				data = $anidb.mylist( key, 1 )
 			when "w"
-				key = largv.shift
-				cmd = largv.shift
-				data = $anidb.mylist( key, 0 )
-				if ( data.nil? )
-					next
-				end
-				mylist_entry = mylist_decode(key, data)
-				mylist_entry = mylist_edit( mylist_entry, cmd )
-				if mylist_entry.nil?
-					usage
-				end
-				$anidb.add( key, mylist_entry )
-				data = $anidb.mylist( key, 1 )
+				write = largv.shift
 			end
+			next
+		end
+		case fc
+		when "a"
+			data = $anidb.animes( arg, 0 )
+			if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
+				next
+			end
+			show_anidb($response_anime, arg, data)
+		when "e"
+			data = $anidb.episodes( arg, 0 )
+			if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
+				next
+			end
+			show_anidb($response_episode, arg, data)
+		when "f"
+			data = $anidb.files( arg, 0 )
+			if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
+				next
+			end
+			show_anidb($response_file, arg, data)
+		when "g"
+			data = $anidb.groups( arg, 0 )
+			if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
+				next
+			end
+			show_anidb($response_group, arg, data)
+		when "m"
+			$anidb.add( arg, nil )
+		when "r"
+			data = $anidb.mylist( arg, 0 )
+			if ( data.nil? ) or ( $config[ 'Quiet' ] != 0 )
+				next
+			end
+			show_anidb($response_mylist, arg, data)
+		when "u"
+			data = $anidb.mylist( arg, 0 )
+			if ( data.nil? )
+				next
+			end
+			mylist_entry = mylist_decode(arg, data)
+			mylist_entry[ 'viewdate' ] = "0"
+			$anidb.add( arg, mylist_entry )
+			data = $anidb.mylist( arg, 1 )
+		when "v"
+			data = $anidb.mylist( arg, 0 )
+			if ( data.nil? )
+				next
+			end
+			mylist_entry = mylist_decode(arg, data)
+			if mylist_entry[ 'viewdate' ] != "0"
+				next
+			end
+			mylist_entry[ 'viewdate' ] = "1"
+			$anidb.add( arg, mylist_entry )
+			data = $anidb.mylist( arg, 1 )
+		when "w"
+			data = $anidb.mylist( arg, 0 )
+			if ( data.nil? )
+				next
+			end
+			mylist_entry = mylist_decode(arg, data)
+			mylist_entry = mylist_edit( mylist_entry, write )
+			if mylist_entry.nil?
+				usage
+			end
+			$anidb.add( arg, mylist_entry )
+			data = $anidb.mylist( arg, 1 )
 		end
 	end
 end
