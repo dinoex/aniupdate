@@ -1410,6 +1410,7 @@ mylist_edit(MYLIST_TYP *mylist, const char *changes)
 {
 	char *buffer;
 	char *value;
+	int i;
 	char ch;
 
 	if (changes == NULL)
@@ -1440,6 +1441,16 @@ mylist_edit(MYLIST_TYP *mylist, const char *changes)
 		};
 		if (strcmp(buffer,"storage") == 0) {
 			mylist->ml_storage = value;
+			return 0;
+		};
+		if (strcmp(buffer,"state") == 0) {
+                        for ( i=0; i < MYLIST_MAX_STATE; i++ ) {
+				if ( string_compare( mylist_states[i], value ) != 0 )
+					continue;
+				snprintf( value, 2, "%1d", i );
+				break;
+			}
+			mylist->ml_state = value;
 			return 0;
 		};
 		break;
@@ -1765,13 +1776,17 @@ show_anidb(const char *const *info, const char *key, const char *data)
 		[self nosession];
 		return [self fetch: db: cmd: key: force];
 	case 310:
-	case 311:
 	case 320:
 	case 321:
+	case 322:
 	case 330:
 	case 340:
 	case 350:
 		warnx("Server returns: %-70.70s", rbuf);
+		return NULL;
+	case 311:
+		/* Update valid Session */
+		localdb_write(Session_db, C_SESSION, session);
 		return NULL;
 	case 210:
 	case 220:
@@ -2090,13 +2105,12 @@ command_run(int argc, const char *const *argv)
 			ch = *(++cptr);
 			switch (ch) {
 			case 'w': /* edit mylist */
-				fc = ch;
 				GET_NEXT_DATA(cptr);
 				field = cptr;
 				break;
 			case 'p': /* ping */
 				[anidb_o ping];
-				/* FALLTHROUGH */
+				break;
 			case 'a': /* read anime from anidb */
 			case 'e': /* read episode from anidb */
 			case 'f': /* read file from anidb */
@@ -2105,11 +2119,11 @@ command_run(int argc, const char *const *argv)
 			case 'r': /* read from mylist */
 			case 'u': /* set unviewied in mylist */
 			case 'v': /* set viewied in mylist */
-				fc = ch;
 				break;
 			default:
 				usage();
 			}
+			fc = ch;
 			continue;
 		}
 		switch (fc) {
@@ -2163,6 +2177,9 @@ command_run(int argc, const char *const *argv)
 			mylist_decode(&mylist_entry, cptr, data);
 			if (mylist_edit(&mylist_entry, field) != 0)
 				 usage();
+			/* viedate can't be preserved */
+			if (strcmp(mylist_entry.ml_viewdate,C_0) != 0)
+				mylist_entry.ml_viewdate = "1";
 			[anidb_o add: cptr: &mylist_entry];
 			[anidb_o mylist: cptr: YES];
 			break;

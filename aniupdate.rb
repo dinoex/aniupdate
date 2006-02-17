@@ -577,10 +577,14 @@ class Anidb_Api
     when "210", "220", "221", "230", "240", "250"
       # update vaild session
       $session_db.write( 'session', @session )
+    when "311"
+      # update vaild session
+      $session_db.write( 'session', @session )
+      return nil
     when "501", "506"
       nosession
       return fetch( db, cmd, key, force )
-    when "310", "311", "320", "321", "330", "340", "350"
+    when "310", "320", "321", "322", "330", "340", "350"
       STDERR.print "Server returns: #{@rbuf}\n"
       return nil
     when "507", "555", "601", "666"
@@ -676,6 +680,7 @@ class Anidb_Api
       @cbuf << "&source=#{edit[ 'source' ]}"
       @cbuf << "&storage=#{edit[ 'storage' ]}"
       @cbuf << "&other=#{edit[ 'other' ]}"
+      @cbuf << "&edit=1"
     end
     return fetch( nil, @cbuf, $hash.hash_dbkey, 0 )
   end
@@ -877,8 +882,15 @@ def mylist_edit( mylist, changes )
     mylist[ 'other' ] = "#{value}"
   when /^so/
     mylist[ 'source' ] = "#{value}"
-  when /^st/
+  when /^sto/
     mylist[ 'storage' ] = "#{value}"
+  when /^sta/
+    known = $mylist_states.index( "#{value}" )
+    if known.nil?
+      mylist[ 'state' ] = "#{value}"
+    else
+      mylist[ 'state' ] = "#{known}"
+    end
   else
     return nil
   end
@@ -1096,6 +1108,10 @@ def command_run( argv )
       end
       mylist_entry = mylist_decode(arg, data)
       mylist_entry = mylist_edit( mylist_entry, write )
+      ## We have ro resset viewdate
+      if mylist_entry[ 'viewdate' ] != "0"
+        mylist_entry[ 'viewdate' ] = "1"
+      end
       if mylist_entry.nil?
         usage
       end
