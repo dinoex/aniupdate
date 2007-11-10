@@ -211,6 +211,7 @@ static int Remote_port;
 static int Retrys;
 static int Timeout;
 static long Batch_count = 0;
+static int Batch_error = 0;
 
 static int connected = NO;
 static int s = -1;
@@ -1624,9 +1625,11 @@ anidb_login(void)
 	anidb_status();
 	switch (server_status) {
 	case 200:
+		Batch_error = 0;
 		break;
 	case 201:
 		warnx("Server returns: %-70.70s", rbuf);
+		Batch_error = 1;
 		break;
 	case 500:
 	case 501:
@@ -1732,6 +1735,7 @@ anidb_fetch(const char *db, const char *cmd, const char *key, int force)
 	case 501:
 	case 506:
 		anidb_nosession();
+		Batch_error = 1;
 		return anidb_fetch(db, cmd, key, force);
 	case 310:
 	case 320:
@@ -1740,11 +1744,13 @@ anidb_fetch(const char *db, const char *cmd, const char *key, int force)
 	case 330:
 	case 340:
 	case 350:
-		warnx("Server returns: %-70.70s", rbuf);
-		return NULL;
-	case 311:
 		/* update vaild session */
 		localdb_write(Session_db, C_SESSION, session);
+		warnx("Server returns: %-70.70s", rbuf);
+		if (server_status == 310)
+			Batch_error = 0;
+		else
+			Batch_error = 2;
 		return NULL;
 	case 210:
 	case 220:
@@ -1752,8 +1758,10 @@ anidb_fetch(const char *db, const char *cmd, const char *key, int force)
 	case 230:
 	case 240:
 	case 250:
+	case 311:
 		/* update vaild session */
 		localdb_write(Session_db, C_SESSION, session);
+		Batch_error = 0;
 		break;
 	case 507:
 	case 555:
@@ -1767,6 +1775,7 @@ anidb_fetch(const char *db, const char *cmd, const char *key, int force)
 		errx(EX_NOUSER, "Server returns: %-70.70s", rbuf);
 	default:
 		warnx("Server returns: %-70.70s", rbuf);
+		Batch_error = 1;
 		return NULL;
 	}
 	if (db == NULL)
@@ -2190,6 +2199,7 @@ main(int argc, const char *const *argv)
 	if (Keep_session == NO)
 		anidb_logout();
 	network_close();
+	exit( Batch_error );
 	return 0;
 }
 
