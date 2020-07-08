@@ -1,0 +1,33 @@
+# aniupdate configuration
+#
+# auth options
+User = "user"
+Password = "password"
+#
+# network options
+Server_name="api.anidb.net"
+Remote_port=9000
+Local_port=9000
+#
+Hash_program="edonkey-tool-hash"
+#
+Names_db="db/names.db"
+Animes_db="db/animes.db"
+Episodes_db="db/episodes.db"
+Files_db="db/files.db"
+Groups_db="db/groups.db"
+Mylist_db="db/mylist.db"
+Session_db="db/session.db"
+#
+# Stay logged in
+Keep_session=1
+#
+# pogram options
+Debug=1
+Verbose=0
+#
+# data options
+Add_state=1
+Add_viewed=0
+#
+# eof
