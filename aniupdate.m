@@ -534,9 +534,11 @@ local_read(const char *name)
 	long i;
 	int flag;
 
+/* Object may not respond to init
 	[super init];
+*/
 
-	/* names must be sorrtet */
+	/* names must be sorted */
 	config = box;
 	for (i = 0L; config[i].typ != -1; i ++) {
 		if (config[i + 1].typ == -1)
@@ -928,7 +930,7 @@ localdb_read(const char *name, const char *hash)
 				fbuf[data.size - 1] = 0;
 			str = fbuf;
 		} else {
-			warnx("database get failed, size = %d", data.size);
+			warnx("database get failed, size = %ld", data.size);
 		}
 	} else {
 		if (rc != 1)
@@ -1664,7 +1666,7 @@ show_anidb(const char *const *info, const char *key, const char *data)
 	}
 
 	len = snprintf(sbuf, MAX_BUF - 1,
-		"AUTH user=%s&pass=%s&protover=3&client=aniupdate&clientver=2&tag=%s\n",
+		"AUTH user=%s&pass=%s&protover=3&client=aniupdate&clientver=2&enc=ISO-8859-1&tag=%s\n",
 		User, Password, tag);
 	[network_o send: sbuf: len];
 	[network_o recv: rbuf: 0];
@@ -2066,8 +2068,8 @@ command_options(int argc, const char *const *argv)
 			case 'm': /* add to mylist */
 			case 'p': /* ping */
 			case 'r': /* read from mylist */
-			case 'u': /* set unviewied in mylist */
-			case 'v': /* set viewied in mylist */
+			case 'u': /* set unviewed in mylist */
+			case 'v': /* set viewed in mylist */
 				break;
 			default:
 				usage();
@@ -2126,8 +2128,8 @@ command_run(int argc, const char *const *argv)
 			case 'g': /* read group from anidb */
 			case 'm': /* add to mylist */
 			case 'r': /* read from mylist */
-			case 'u': /* set unviewied in mylist */
-			case 'v': /* set viewied in mylist */
+			case 'u': /* set unviewed in mylist */
+			case 'v': /* set viewed in mylist */
 				break;
 			default:
 				usage();
@@ -2186,7 +2188,7 @@ command_run(int argc, const char *const *argv)
 			mylist_decode(&mylist_entry, cptr, data);
 			if (mylist_edit(&mylist_entry, field) != 0)
 				 usage();
-			/* viedate can't be preserved */
+			/* viewdate can't be preserved */
 			if (strcmp(mylist_entry.ml_viewdate,C_0) != 0)
 				mylist_entry.ml_viewdate = "1";
 			[anidb_o add: cptr: &mylist_entry];
