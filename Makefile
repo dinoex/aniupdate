@@ -58,11 +58,11 @@ SRCS=	aniupdate.c
 .else
 SRCS=	aniupdate.m
 .if !exists(/usr/lib/libcipher.so)
-OBJCLIBS?=	-lobjc -lc_r
+OBJCLIBS?=	-lobjc -pthread
 .endif
 .endif
 
-NO_MAN=YES
+MK_MAN=no
 
 .include <bsd.prog.mk>
 
