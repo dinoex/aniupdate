@@ -1,5 +1,5 @@
 #!/bin/sh
-find "${@}" -type f -exec edonkey-tool-hash "{}" ";" |
+find "${@}" -type f \( -name *.mkv -o -name *.avi -o -name *.mp4 \) -exec edonkey-tool-hash "{}" ";" |
 while read hash
 do
 	echo "${hash}"
